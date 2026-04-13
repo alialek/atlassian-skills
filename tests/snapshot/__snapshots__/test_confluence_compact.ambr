@@ -1,13 +1,14 @@
 # serializer version: 1
 # name: test_confluence_page_compact
   '''
-   | None | page |  |  |  | 
+  12345678 | [PROJ-3] 검색 결과 정렬 개선 | page | space:TESTSPACE | v2
+  url:https://confluence.example.com/pages/viewpage.action?pageId=12345678
   
   '''
 # ---
 # name: test_confluence_page_json_format
   '''
-  {"id":"12345678","title":"[RLM-3] 검색 결과 정렬 개선","type":"page","status":null,"space":{"id":null,"key":"IVSL","name":"IVS Lab","type":null},"version":2,"body_storage":null,"body_view":null,"ancestors":[],"children":[],"links":null,"url":"https://confluence.example.com/pages/viewpage.action?pageId=12345678","content":{"value":"Jiraissuekey,summary,description,reporter,statuskey,summary,description,reporter,status20key = RLM-3ad65ca34-634b-332b-9309-b0ad222a1be6\n\n연결된 Story\n---------\n\nJiraissuekey,summary,issuetype,created,updated,assignee,reporter,priority,statuskey,summary,issuetype,created,updated,assignee,reporter,priority,status50\"Epic Link\" = RLM-3 ORDER BY status, updated DESCad65ca34-634b-332b-9309-b0ad222a1be6","format":"markdown"},"attachments":[],"created":"","updated":"","emoji":"1f3af"}
+  {"id":"12345678","title":"[PROJ-3] 검색 결과 정렬 개선","type":"page","space":{"key":"TESTSPACE","name":"Test Lab"},"version":2,"ancestors":[],"children":[],"url":"https://confluence.example.com/pages/viewpage.action?pageId=12345678","content":{"value":"Jiraissuekey,summary,description,reporter,statuskey,summary,description,reporter,status20key = PROJ-3ad65ca34-634b-332b-9309-b0ad222a1be6\n\n연결된 Story\n---------\n\nJiraissuekey,summary,issuetype,created,updated,assignee,reporter,priority,statuskey,summary,issuetype,created,updated,assignee,reporter,priority,status50\"Epic Link\" = PROJ-3 ORDER BY status, updated DESCad65ca34-634b-332b-9309-b0ad222a1be6","format":"markdown"},"attachments":[],"created":"","updated":"","emoji":"1f3af"}
   
   '''
 # ---
@@ -19,18 +20,18 @@
 # ---
 # name: test_confluence_search_compact
   '''
-  12345001 | [RLM-23] 리포트 빌드 인프라 | page | space:IVSL | v
+  12345001 | [PROJ-23] 리포트 빌드 인프라 | page | space:TESTSPACE | v
   url:https://confluence.example.com/pages/viewpage.action?pageId=12345001
-  12345002 | [RLM-20] 사용자 검색 쿼리 빌더 구현 | page | space:IVSL | v
+  12345002 | [PROJ-20] 사용자 검색 쿼리 빌더 구현 | page | space:TESTSPACE | v
   url:https://confluence.example.com/pages/viewpage.action?pageId=12345002
-  12345003 | [RLM-22] 캐시 데이터셋 재빌드 + 디스크 용량 산정 | page | space:IVSL | v
+  12345003 | [PROJ-22] 캐시 데이터셋 재빌드 + 디스크 용량 산정 | page | space:TESTSPACE | v
   url:https://confluence.example.com/pages/viewpage.action?pageId=12345003
   
   '''
 # ---
 # name: test_confluence_search_json_format
   '''
-  [{"id":"12345001","title":"[RLM-23] 리포트 빌드 인프라","type":"page","space":{"key":"IVSL","name":"Space IVSL"},"ancestors":[],"children":[],"url":"https://confluence.example.com/pages/viewpage.action?pageId=12345001","content":{"value":"Story Summary\nBehavior\n@@@hl@@@RLM@@@endhl@@@ 학습 파이프라인이 4개 데이터셋(av2\\_sensor, dataset_b, dataset_c, av2\\_motion)을 하나의 학습 루프에서 사용할 수 있게 된다 …","format":"view"},"attachments":[],"created":"","updated":""},{"id":"12345002","title":"[RLM-20] 사용자 검색 쿼리 빌더 구현","type":"page","space":{"key":"IVSL","name":"Space IVSL"},"ancestors":[],"children":[],"url":"https://confluence.example.com/pages/viewpage.action?pageId=12345002","content":{"value":".\nWhy\n@@@hl@@@RLM@@@endhl@@@ 모델은 lookup index만으로 경로를 예측하므로, 전방 분기점 방향/거리, 도로 등급/차로수 등 글로벌 경로 정보가 부재하다.","format":"view"},"attachments":[],"created":"","updated":""},{"id":"12345003","title":"[RLM-22] 캐시 데이터셋 재빌드 + 디스크 용량 산정","type":"page","space":{"key":"IVSL","name":"Space IVSL"},"ancestors":[],"children":[],"url":"https://confluence.example.com/pages/viewpage.action?pageId=12345003","content":{"value":"+ ring\\_front\\_center(portrait) 기준이다. @@@hl@@@RLM@@@endhl@@@-13에서 정의한 2-step transform를 적용하려면 subset 자체를 재구축해야 한다.","format":"view"},"attachments":[],"created":"","updated":""}]
+  [{"id":"12345001","title":"[PROJ-23] 리포트 빌드 인프라","type":"page","space":{"key":"TESTSPACE","name":"Space TESTSPACE"},"ancestors":[],"children":[],"url":"https://confluence.example.com/pages/viewpage.action?pageId=12345001","content":{"value":"Story Summary\nBehavior\n@@@hl@@@PROJ@@@endhl@@@ 학습 파이프라인이 4개 데이터셋(av2\\_sensor, dataset_b, dataset_c, av2\\_motion)을 하나의 학습 루프에서 사용할 수 있게 된다 …","format":"view"},"attachments":[],"created":"","updated":""},{"id":"12345002","title":"[PROJ-20] 사용자 검색 쿼리 빌더 구현","type":"page","space":{"key":"TESTSPACE","name":"Space TESTSPACE"},"ancestors":[],"children":[],"url":"https://confluence.example.com/pages/viewpage.action?pageId=12345002","content":{"value":".\nWhy\n@@@hl@@@PROJ@@@endhl@@@ 모델은 lookup index만으로 경로를 예측하므로, 전방 분기점 방향/거리, 도로 등급/차로수 등 글로벌 경로 정보가 부재하다.","format":"view"},"attachments":[],"created":"","updated":""},{"id":"12345003","title":"[PROJ-22] 캐시 데이터셋 재빌드 + 디스크 용량 산정","type":"page","space":{"key":"TESTSPACE","name":"Space TESTSPACE"},"ancestors":[],"children":[],"url":"https://confluence.example.com/pages/viewpage.action?pageId=12345003","content":{"value":"+ ring\\_front\\_center(portrait) 기준이다. @@@hl@@@PROJ@@@endhl@@@-13에서 정의한 2-step transform를 적용하려면 subset 자체를 재구축해야 한다.","format":"view"},"attachments":[],"created":"","updated":""}]
   
   '''
 # ---

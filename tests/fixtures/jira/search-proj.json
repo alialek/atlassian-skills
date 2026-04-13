@@ -5,23 +5,23 @@
   "issues": [
     {
       "id": "629816",
-      "key": "RLM-3",
+      "key": "PROJ-3",
       "summary": "검색 결과 정렬 개선",
       "description": "h2. 방향\n\n분기점/합류점에서 모델이 어느 방향으로 갈지 정확히 판단한다\n\nh2. 배경\n\n현재 모델은 lookup index만으로 경로를 예측하며,\n분기점에서 어느 방향으로 갈지 판단할 글로벌 경로 정보가 없다.",
       "status": {"name": "To Do", "category": "To Do", "color": "default"},
       "issue_type": {"name": "Epic"},
       "priority": {"name": "Medium"},
       "assignee": {
-        "display_name": "송승목(seungmok.song) 담당자",
-        "name": "seungmok.song",
-        "email": "seungmok.song@example.com",
+        "display_name": "Test User2(testuser2) 담당자",
+        "name": "testuser2",
+        "email": "testuser2@example.com",
         "avatar_url": "https://www.gravatar.com/avatar/21c62ecc8b7d638a7f5452819353e5a2?d=mm&s=48",
-        "key": "seungmok.song"
+        "key": "testuser2"
       },
       "reporter": {
-        "display_name": "조은산(eunsan.jo) 담당자",
-        "name": "eunsan.jo",
-        "email": "eunsan.jo@example.com",
+        "display_name": "Test User(testuser) 담당자",
+        "name": "testuser",
+        "email": "testuser@example.com",
         "avatar_url": "https://jira.example.com/secure/useravatar?ownerId=JIRAUSER14505&avatarId=14600",
         "key": "JIRAUSER14505"
       },
@@ -30,23 +30,23 @@
     },
     {
       "id": "631647",
-      "key": "RLM-24",
+      "key": "PROJ-24",
       "summary": "리포트 내보내기 성능 향상",
       "description": "_(Auto-mirrored from Confluence)_ ...(truncated for fixture)",
       "status": {"name": "To Do", "category": "To Do", "color": "default"},
       "issue_type": {"name": "Story"},
       "priority": {"name": "Medium"},
       "assignee": {
-        "display_name": "조은산(eunsan.jo) 담당자",
-        "name": "eunsan.jo",
-        "email": "eunsan.jo@example.com",
+        "display_name": "Test User(testuser) 담당자",
+        "name": "testuser",
+        "email": "testuser@example.com",
         "avatar_url": "https://jira.example.com/secure/useravatar?ownerId=JIRAUSER14505&avatarId=14600",
         "key": "JIRAUSER14505"
       },
       "reporter": {
-        "display_name": "조은산(eunsan.jo) 담당자",
-        "name": "eunsan.jo",
-        "email": "eunsan.jo@example.com",
+        "display_name": "Test User(testuser) 담당자",
+        "name": "testuser",
+        "email": "testuser@example.com",
         "avatar_url": "https://jira.example.com/secure/useravatar?ownerId=JIRAUSER14505&avatarId=14600",
         "key": "JIRAUSER14505"
       },
@@ -55,23 +55,23 @@
     },
     {
       "id": "631646",
-      "key": "RLM-23",
+      "key": "PROJ-23",
       "summary": "리포트 빌드 인프라",
       "description": "_(Auto-mirrored from Confluence)_ ...(truncated for fixture)",
       "status": {"name": "To Do", "category": "To Do", "color": "default"},
       "issue_type": {"name": "Story"},
       "priority": {"name": "Medium"},
       "assignee": {
-        "display_name": "조은산(eunsan.jo) 담당자",
-        "name": "eunsan.jo",
-        "email": "eunsan.jo@example.com",
+        "display_name": "Test User(testuser) 담당자",
+        "name": "testuser",
+        "email": "testuser@example.com",
         "avatar_url": "https://jira.example.com/secure/useravatar?ownerId=JIRAUSER14505&avatarId=14600",
         "key": "JIRAUSER14505"
       },
       "reporter": {
-        "display_name": "조은산(eunsan.jo) 담당자",
-        "name": "eunsan.jo",
-        "email": "eunsan.jo@example.com",
+        "display_name": "Test User(testuser) 담당자",
+        "name": "testuser",
+        "email": "testuser@example.com",
         "avatar_url": "https://jira.example.com/secure/useravatar?ownerId=JIRAUSER14505&avatarId=14600",
         "key": "JIRAUSER14505"
       },

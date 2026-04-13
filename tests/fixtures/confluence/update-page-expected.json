@@ -3,10 +3,10 @@
   "id": "12345678",
   "type": "page",
   "status": "current",
-  "title": "[RLM-3] 검색 결과 정렬 개선",
+  "title": "[PROJ-3] 검색 결과 정렬 개선",
   "space": {
-    "key": "IVSL",
-    "name": "IVS Lab"
+    "key": "TESTSPACE",
+    "name": "Test Lab"
   },
   "version": {
     "number": 3,
