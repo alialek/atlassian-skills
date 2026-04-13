@@ -1,0 +1,22 @@
+{
+  "_comment": "Expected response structure from PUT /rest/api/content/{id}. Note: version.number must be currentVersion+1 in request (optimistic concurrency). Source: mcp-atlassian/confluence/pages.py:676",
+  "id": "12345678",
+  "type": "page",
+  "status": "current",
+  "title": "[RLM-3] 검색 결과 정렬 개선",
+  "space": {
+    "key": "IVSL",
+    "name": "IVS Lab"
+  },
+  "version": {
+    "number": 3,
+    "when": "2026-04-13T10:00:00.000+0900",
+    "message": "Updated via atls"
+  },
+  "body": {
+    "storage": {
+      "value": "<p>Updated content</p>",
+      "representation": "storage"
+    }
+  }
+}
