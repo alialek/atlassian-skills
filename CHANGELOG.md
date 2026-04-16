@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.2] - 2026-04-16
+
+### Changed
+- Remove `[tool.uv.sources]` local cfxmark editable path. cfxmark>=0.4 is now resolved from PyPI in both local development and CI. No impact on published wheel metadata.
+
+### CI
+- Add GitHub Actions CI workflow: ruff lint/format + mypy + pytest matrix (Python 3.10-3.13)
+- Add release workflow: tag `v*` push triggers `uv build` → PyPI publish → GitHub Release with CHANGELOG section extraction
+- Add `tomli` to dev deps so mypy (configured for Python 3.10) can resolve the `sys.version_info` fallback branch in `core/config.py`
+- Add PyPI version, Python versions, downloads, License, CI status, GitHub stars badges to README
+
+## [0.1.1] - 2026-04-15
+
+### Fixed
+- `create_issue_link` now handles 201 No Content response from Jira Server (#3)
+
 ## [0.1.0] - 2026-04-13
 
 ### Added
