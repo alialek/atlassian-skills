@@ -467,8 +467,9 @@ class JiraClient(BaseClient):
         }
         resp = self.post("/rest/api/2/issueLink", json=payload)
         if resp.status_code in (200, 201):
-            result: dict[str, Any] = resp.json()
-            return result
+            if resp.content:
+                return resp.json()
+            return {"status": "linked"}
         return None
 
     def list_remote_issue_links(self, key: str) -> list[dict[str, Any]]:
