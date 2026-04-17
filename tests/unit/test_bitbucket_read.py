@@ -128,14 +128,63 @@ def test_get_pull_request_diff_with_path() -> None:
 
 @respx.mock
 def test_list_pull_request_comments() -> None:
-    fixture = _load("pull-request-comments.json")
-    respx.get(f"{BASE_URL}{API}/projects/PROJ/repos/my-repo/pull-requests/1/comments").mock(
-        return_value=httpx.Response(200, json=fixture)
+    fixture = _load("pull-request-activities.json")
+    # Inject COMMENTED activities with comment data matching the comments fixture
+    activities_with_comments = {
+        "size": 3,
+        "limit": 25,
+        "isLastPage": True,
+        "values": [
+            {
+                "id": 10,
+                "action": "COMMENTED",
+                "createdDate": 1713200000000,
+                "comment": {
+                    "id": 100,
+                    "text": "Looks good overall, but please fix the naming",
+                    "author": {"name": "alice", "displayName": "Alice Lee"},
+                    "severity": "NORMAL",
+                    "state": "OPEN",
+                    "version": 0,
+                    "comments": [
+                        {
+                            "id": 101,
+                            "text": "Fixed, thanks!",
+                            "author": {"name": "jsmith", "displayName": "John Smith"},
+                            "severity": "NORMAL",
+                            "state": "OPEN",
+                            "version": 0,
+                            "comments": [],
+                        }
+                    ],
+                },
+            },
+            {
+                "id": 11,
+                "action": "COMMENTED",
+                "createdDate": 1713220000000,
+                "comment": {
+                    "id": 102,
+                    "text": "This line needs refactoring",
+                    "author": {"name": "bob", "displayName": "Bob Kim"},
+                    "severity": "BLOCKER",
+                    "state": "RESOLVED",
+                    "version": 1,
+                    "anchor": {"path": "src/main.py", "line": 42, "lineType": "ADDED", "fileType": "TO"},
+                    "comments": [],
+                },
+            },
+            {"id": 12, "action": "OPENED", "createdDate": 1713190000000},
+        ],
+        "start": 0,
+    }
+    respx.get(f"{BASE_URL}{API}/projects/PROJ/repos/my-repo/pull-requests/1/activities").mock(
+        return_value=httpx.Response(200, json=activities_with_comments)
     )
 
     result = client.list_pull_request_comments("PROJ", "my-repo", 1)
 
-    assert len(result) == 2
+    assert len(result) == 2  # Only COMMENTED activities, not OPENED
     assert isinstance(result[0], PullRequestComment)
     assert result[0].id == 100
     assert result[0].text == "Looks good overall, but please fix the naming"

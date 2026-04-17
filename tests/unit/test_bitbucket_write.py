@@ -29,7 +29,9 @@ def _load(name: str) -> dict:
 
 @respx.mock
 def test_get_current_user_slug() -> None:
-    respx.get(f"{BASE_URL}/plugins/servlet/applinks/whoami").mock(return_value=httpx.Response(200, text="jsmith"))
+    respx.get(f"{BASE_URL}{API}/users").mock(
+        return_value=httpx.Response(200, json={"values": []}, headers={"X-AUSERNAME": "jsmith"})
+    )
 
     # Reset cache
     client._current_user_slug = None
@@ -161,7 +163,9 @@ def test_unapprove_pull_request() -> None:
 @respx.mock
 def test_needs_work_pull_request() -> None:
     client._current_user_slug = None
-    respx.get(f"{BASE_URL}/plugins/servlet/applinks/whoami").mock(return_value=httpx.Response(200, text="jsmith"))
+    respx.get(f"{BASE_URL}{API}/users").mock(
+        return_value=httpx.Response(200, json={"values": []}, headers={"X-AUSERNAME": "jsmith"})
+    )
     respx.put(f"{BASE_URL}{API}/projects/PROJ/repos/my-repo/pull-requests/1/participants/jsmith").mock(
         return_value=httpx.Response(200, json={"status": "NEEDS_WORK"})
     )
