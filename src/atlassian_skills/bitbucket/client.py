@@ -73,15 +73,24 @@ class BitbucketClient(BaseClient):
     # ------------------------------------------------------------------
 
     def _get_current_user_slug(self) -> str:
-        """Get the authenticated user's slug (cached after first call)."""
+        """Get the authenticated user's slug (cached after first call).
+
+        Tries X-AUSERNAME header from any authenticated request first,
+        then falls back to /plugins/servlet/applinks/whoami.
+        """
         if self._current_user_slug is not None:
             return self._current_user_slug
-        resp = self.get("/plugins/servlet/applinks/whoami")
-        slug = resp.text.strip()
+        # Primary: X-AUSERNAME header from a lightweight API call
+        resp = self.get(f"{self.API}/users", params={"limit": 1})
+        slug = resp.headers.get("X-AUSERNAME", "").strip()
         if not slug:
-            raise ValidationError("Could not determine current user from /plugins/servlet/applinks/whoami")
-        self._current_user_slug = slug
-        return slug
+            # Fallback: whoami servlet
+            resp2 = self.get("/plugins/servlet/applinks/whoami")
+            slug = resp2.text.strip()
+        if not slug:
+            raise ValidationError("Could not determine current user. Check authentication.")
+        self._current_user_slug = str(slug)
+        return self._current_user_slug
 
     # ------------------------------------------------------------------
     # Projects
@@ -163,12 +172,20 @@ class BitbucketClient(BaseClient):
     def list_pull_request_comments(
         self, project: str, repo: str, pr_id: int, *, limit: int = 25
     ) -> list[PullRequestComment]:
-        """GET .../pull-requests/{id}/comments"""
+        """Extract comments from PR activities.
+
+        Bitbucket Server's /comments endpoint requires a path parameter.
+        Instead, we use /activities and filter for COMMENTED actions.
+        """
         items = self._get_paged(
-            f"{self._pr_path(project, repo)}/{pr_id}/comments",
+            f"{self._pr_path(project, repo)}/{pr_id}/activities",
             limit=limit,
         )
-        return [PullRequestComment.model_validate(i) for i in items]
+        comments: list[PullRequestComment] = []
+        for item in items:
+            if item.get("action") == "COMMENTED" and item.get("comment"):
+                comments.append(PullRequestComment.model_validate(item["comment"]))
+        return comments
 
     def list_pull_request_commits(self, project: str, repo: str, pr_id: int, *, limit: int = 25) -> list[Commit]:
         """GET .../pull-requests/{id}/commits"""
