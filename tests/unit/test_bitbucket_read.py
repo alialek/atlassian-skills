@@ -128,8 +128,7 @@ def test_get_pull_request_diff_with_path() -> None:
 
 @respx.mock
 def test_list_pull_request_comments() -> None:
-    fixture = _load("pull-request-activities.json")
-    # Inject COMMENTED activities with comment data matching the comments fixture
+    # Activities with COMMENTED actions — comments extracted from these
     activities_with_comments = {
         "size": 3,
         "limit": 25,
