@@ -1,9 +1,32 @@
 from __future__ import annotations
 
+import contextlib
+import sys
+
 import typer
 
 from atlassian_skills import __version__
 from atlassian_skills.core.format import OutputFormat
+
+
+def _configure_windows_encoding() -> None:
+    """Reconfigure stdio to UTF-8 on Windows so cp949/cp932/gbk consoles don't crash.
+
+    Windows CJK locales (`sys.stdout.encoding == "cp949"` on Korean Windows) cannot
+    represent common Atlassian body characters like em dash (U+2014), curly quotes,
+    and ellipsis. Without this reconfigure, `atls ... --format=md` raises
+    `UnicodeEncodeError` on any body that has been through Atlassian's text auto-format.
+    `errors="replace"` is a last-resort guard for legacy consoles that truly can't
+    render UTF-8 — they fall back to `?` instead of crashing.
+    """
+    if sys.platform != "win32":
+        return
+    for stream in (sys.stdout, sys.stderr, sys.stdin):
+        with contextlib.suppress(AttributeError, OSError):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+_configure_windows_encoding()
 
 
 def _version_callback(value: bool) -> None:

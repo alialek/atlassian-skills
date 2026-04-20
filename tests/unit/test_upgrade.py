@@ -70,12 +70,15 @@ class TestUpgradeUv:
                 "atls": "/usr/local/bin/atls",
             }.get(name)
 
-        def fake_run(
-            command: list[str], *, text: bool, capture_output: bool, check: bool
-        ) -> subprocess.CompletedProcess[str]:
-            assert text is True
-            assert capture_output is True
-            assert check is False
+        captured_kwargs: list[dict[str, object]] = []
+
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            assert kwargs["text"] is True
+            assert kwargs["capture_output"] is True
+            assert kwargs["check"] is False
+            assert kwargs["encoding"] == "utf-8"
+            assert kwargs["errors"] == "replace"
+            captured_kwargs.append(kwargs)
             commands.append(command)
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
@@ -90,6 +93,7 @@ class TestUpgradeUv:
             ["/usr/bin/uv", "tool", "upgrade", "atlassian-skills"],
             ["/usr/local/bin/atls", "setup", "all"],
         ]
+        assert len(captured_kwargs) == 2  # upgrade + setup all
         assert "detected uv install" in result.output
         assert "Refreshing Claude/Codex setup with `atls setup all`..." in result.output
 
@@ -108,9 +112,7 @@ class TestUpgradeUv:
                 return "/usr/bin/uv"
             return None
 
-        def fake_run(
-            command: list[str], *, text: bool, capture_output: bool, check: bool
-        ) -> subprocess.CompletedProcess[str]:
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
             commands.append(command)
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
@@ -145,9 +147,7 @@ class TestUpgradePip:
         def fake_which(name: str) -> str | None:
             return {"atls": "/usr/local/bin/atls"}.get(name)
 
-        def fake_run(
-            command: list[str], *, text: bool, capture_output: bool, check: bool
-        ) -> subprocess.CompletedProcess[str]:
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
             commands.append(command)
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
@@ -175,9 +175,7 @@ class TestUpgradePip:
             which_calls.append(name)
             return {"atls": "/usr/local/bin/atls"}.get(name)  # no uv entry
 
-        def fake_run(
-            command: list[str], *, text: bool, capture_output: bool, check: bool
-        ) -> subprocess.CompletedProcess[str]:
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
         monkeypatch.setattr(upgrade_mod, "_detect_install_method", lambda: "pip")
@@ -202,9 +200,7 @@ class TestUpgradePipx:
                 "atls": "/usr/local/bin/atls",
             }.get(name)
 
-        def fake_run(
-            command: list[str], *, text: bool, capture_output: bool, check: bool
-        ) -> subprocess.CompletedProcess[str]:
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
             commands.append(command)
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
@@ -229,9 +225,7 @@ class TestUpgradePipx:
         def fake_which(name: str) -> str | None:
             return {"atls": "/usr/local/bin/atls"}.get(name)  # pipx absent
 
-        def fake_run(
-            command: list[str], *, text: bool, capture_output: bool, check: bool
-        ) -> subprocess.CompletedProcess[str]:
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
             commands.append(command)
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
