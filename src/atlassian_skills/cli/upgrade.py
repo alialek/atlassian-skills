@@ -20,8 +20,13 @@ def _detect_install_method() -> Literal["uv", "pipx", "pip"]:
 
     The check is case-insensitive and works identically on Windows, macOS, and Linux
     because `pathlib` normalises path separators before splitting into parts.
+
+    We intentionally do **not** call `Path.resolve()` here: uv tool venvs symlink
+    `python` to a uv-managed interpreter like `<data>/uv/python/cpython-.../bin/python`,
+    and resolving the link would hide the `uv/tools` marker and misdetect the install
+    as a plain pip venv.
     """
-    parts = [p.lower() for p in Path(sys.executable).resolve().parts]
+    parts = [p.lower() for p in Path(sys.executable).parts]
     for i in range(len(parts) - 1):
         if parts[i] == "uv" and parts[i + 1] == "tools":
             return "uv"

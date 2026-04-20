@@ -57,6 +57,29 @@ class TestDetectInstallMethod:
         monkeypatch.setattr(sys, "executable", "/usr/bin/python3")
         assert upgrade_mod._detect_install_method() == "pip"
 
+    def test_detects_uv_when_python_is_symlink_to_uv_managed_interpreter(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: uv tool venvs symlink `python` to a uv-managed interpreter.
+
+        Resolving that symlink drops the `uv/tools` segment and previously caused
+        `atls upgrade` to misdetect the install as pip and fail with
+        `No module named pip` inside the uv venv.
+        """
+        import atlassian_skills.cli.upgrade as upgrade_mod
+
+        tool_bin = tmp_path / "uv" / "tools" / "atlassian-skills" / "bin"
+        tool_bin.mkdir(parents=True)
+        managed_bin = tmp_path / "uv" / "python" / "cpython-3.12" / "bin"
+        managed_bin.mkdir(parents=True)
+        real_python = managed_bin / "python3.12"
+        real_python.write_text("", encoding="utf-8")
+        venv_python = tool_bin / "python3"
+        venv_python.symlink_to(real_python)
+
+        monkeypatch.setattr(sys, "executable", str(venv_python))
+        assert upgrade_mod._detect_install_method() == "uv"
+
 
 class TestUpgradeUv:
     def test_uv_path_runs_uv_then_setup_all(self, monkeypatch: pytest.MonkeyPatch) -> None:
