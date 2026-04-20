@@ -20,6 +20,14 @@ the same commands — on Windows they run identically in PowerShell or cmd.
 
 ---
 
+## [0.2.4] - 2026-04-20
+
+### Fixed
+- **`atls upgrade` misdetected uv tool installs as pip** — `_detect_install_method` called `Path(sys.executable).resolve()`, which followed the uv tool venv's `python` symlink all the way to the uv-managed interpreter (`<data>/uv/python/cpython-.../bin/python3.x`). That resolved path no longer contains the `uv/tools` marker, so the detector fell through to the pip branch and ran `python -m pip install --upgrade atlassian-skills` inside a venv that has no `pip` module, failing with `No module named pip`. Fixed by dropping `.resolve()` — `sys.executable` is already absolute, and keeping the symlink means the `uv/tools/<package>/bin/python` layout stays visible to the detector.
+
+### Added
+- `tests/unit/test_upgrade.py::test_detects_uv_when_python_is_symlink_to_uv_managed_interpreter` — regression test that builds a real symlinked layout under `tmp_path` and asserts `_detect_install_method()` still returns `"uv"`.
+
 ## [0.2.3] - 2026-04-20
 
 ### Fixed
