@@ -20,6 +20,18 @@ the same commands — on Windows they run identically in PowerShell or cmd.
 
 ---
 
+## [0.2.3] - 2026-04-20
+
+### Fixed
+- **Windows cp949/cp932/gbk console crash (#5)** — `atls ... --format=md` and `--format=raw` could no longer run on Korean/Japanese/Chinese Windows locales once a Jira or Confluence body contained an em dash (U+2014), curly quotes, ellipsis, or emoji — the default console encoding (`cp949` on Korean Windows) cannot represent those characters, so `typer.echo` raised `UnicodeEncodeError`. Fixed at the CLI entry point: on Windows, `sys.stdout`, `sys.stderr`, and `sys.stdin` are reconfigured to UTF-8 with `errors="replace"` as a legacy-console safety net.
+- A codebase-wide audit of the same pattern caught three additional places that inherited the locale encoding:
+  - `core/format/markdown.py:105` and `core/client.py:205` — `print(..., file=sys.stderr)` for cfxmark warnings and HTTP retry notices. Covered by the same `sys.stderr` reconfigure above.
+  - `core/stdin.py:24` — `sys.stdin.read()` for `--body-file=-` piping. Covered by the same `sys.stdin` reconfigure; piping a UTF-8 markdown file into `atls jira issue update KEY --body-file=-` no longer crashes on cp949 Git Bash.
+  - `cli/upgrade.py:41` — `subprocess.run(..., text=True)` for `uv` / `pipx` / `pip` output. Now explicitly `encoding="utf-8", errors="replace"`, so a non-ASCII line in pip's output cannot break the upgrade flow.
+
+### Added
+- `tests/unit/test_windows_encoding.py` — regression coverage for the entry-point reconfigure (Windows vs Linux vs macOS, streams without `reconfigure()`, cp949-backed TextIOWrapper smoke test).
+
 ## [0.2.2] - 2026-04-20
 
 ### Added

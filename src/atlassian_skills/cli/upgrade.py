@@ -38,7 +38,14 @@ def _echo_process_output(result: subprocess.CompletedProcess[str]) -> None:
 
 
 def _run_checked(command: list[str], *, step_name: str) -> None:
-    result = subprocess.run(command, text=True, capture_output=True, check=False)
+    result = subprocess.run(
+        command,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        check=False,
+    )
     _echo_process_output(result)
     if result.returncode != 0:
         typer.echo(f"{step_name} failed with exit code {result.returncode}.", err=True)
