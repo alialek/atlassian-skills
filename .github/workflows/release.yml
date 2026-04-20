@@ -59,11 +59,21 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           NOTES_FILE=release-notes.md
+
+          # 1. Version-specific section (between "## [X.Y.Z]" and the next "## [")
           awk -v ver="$VERSION" '
             $0 ~ "^## \\[" ver "\\]" { flag=1; next }
             flag && /^## \[/ { exit }
             flag { print }
           ' CHANGELOG.md > section.md
+
+          # 2. Top-level "Upgrading" block (between "## Upgrading" and either "---" or the first versioned "## [")
+          awk '
+            /^## Upgrading/ { flag=1; print; next }
+            flag && /^---$/ { exit }
+            flag && /^## \[/ { exit }
+            flag { print }
+          ' CHANGELOG.md > upgrade.md
 
           if [ -s section.md ]; then
             echo "Using CHANGELOG section for ${VERSION}"
@@ -76,6 +86,12 @@ jobs:
             echo '```bash' >> "$NOTES_FILE"
             echo "uv tool install atlassian-skills==${VERSION}" >> "$NOTES_FILE"
             echo '```' >> "$NOTES_FILE"
+          fi
+
+          # 3. Append the shared Upgrading block so every release carries upgrade instructions
+          if [ -s upgrade.md ]; then
+            printf '\n---\n\n' >> "$NOTES_FILE"
+            cat upgrade.md >> "$NOTES_FILE"
           fi
 
           echo "" >> "$NOTES_FILE"
