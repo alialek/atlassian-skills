@@ -34,7 +34,12 @@ First-class integration with **Claude Code** and **Codex**. `atls setup all` reg
 
 **Recommended: `uv tool install`** — isolates atls in its own environment and makes `atls upgrade` a single command. `pipx` (the pip-world equivalent of `uv tool`) and plain `pip` also work; `atls upgrade` auto-detects all three.
 
-### Step 1 — install `uv` (skip if you already have it)
+### Step 1 — install your package manager (skip if you already have it)
+
+Pick **one**: `uv` (recommended) or `pipx`. If you'll use plain `pip`, skip this step entirely.
+
+<details open>
+<summary><b>Option A — install <code>uv</code> (recommended)</b></summary>
 
 **Linux / macOS**
 ```bash
@@ -47,6 +52,27 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 ```
 
 Alternatives: `brew install uv` (macOS), `winget install astral-sh.uv` (Windows), `pipx install uv` (cross-platform). Full options in the [uv installation docs](https://docs.astral.sh/uv/getting-started/installation/).
+</details>
+
+<details>
+<summary><b>Option B — install <code>pipx</code></b></summary>
+
+**Linux / macOS**
+```bash
+python3 -m pip install --user pipx
+python3 -m pipx ensurepath
+```
+
+**Windows (PowerShell)**
+```powershell
+python -m pip install --user pipx
+python -m pipx ensurepath
+```
+
+Alternatives: `apt install pipx` (Ubuntu 23.04+), `brew install pipx` (macOS), `scoop install pipx` or `winget install pipx` (Windows). Full options in the [pipx installation docs](https://pipx.pypa.io/stable/installation/).
+
+After `ensurepath`, open a new terminal so the updated `PATH` is picked up.
+</details>
 
 ### Step 2 — install atls
 
