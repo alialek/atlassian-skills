@@ -249,6 +249,9 @@ def _stub_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, asset_root: Pat
         setup_mod, "_get_copilot_skill_target", lambda: tmp_path / ".copilot" / "skills" / "atls" / "SKILL.md"
     )
     monkeypatch.setattr(
+        setup_mod, "_get_gigacode_skill_target", lambda: tmp_path / ".gigacode" / "skills" / "atls" / "SKILL.md"
+    )
+    monkeypatch.setattr(
         setup_mod, "_get_copilot_instructions_path", lambda: tmp_path / ".copilot" / "copilot-instructions.md"
     )
 
@@ -418,17 +421,18 @@ def _wizard_input(
     install_claude: str = "n",
     install_codex: str = "n",
     install_copilot: str = "n",
+    install_gigacode: str = "n",
 ) -> str:
     """Build wizard stdin.
 
     The wizard is keyring-only — there is no storage prompt. Each product tuple is (action,) or
     (action, url, pat). The product-block walks Jira → Confluence → Bitbucket, then the agent step
-    asks claude/codex/copilot.
+    asks claude/codex/copilot/gigacode.
     """
     lines: list[str] = []
     for spec in (jira, conf, bb):
         lines.extend(spec)
-    lines += [install_claude, install_codex, install_copilot]
+    lines += [install_claude, install_codex, install_copilot, install_gigacode]
     return "\n".join(lines) + "\n"
 
 
@@ -463,9 +467,9 @@ class TestWizardURLs:
         save_config(config)
 
         runner = CliRunner()
-        # Default for each seeded product is 's' (skip = keep as-is); for agent install all three
-        # default Y. Enter × 3 (jira/conf/bb) + 'n' × 3 to explicitly decline asset installs.
-        result = runner.invoke(app, ["setup"], input="\n\n\nn\nn\nn\n")
+        # Default for each seeded product is 's' (skip = keep as-is); for agent install defaults
+        # are Y. Enter × 3 (jira/conf/bb) + 'n' × 4 to explicitly decline asset installs.
+        result = runner.invoke(app, ["setup"], input="\n\n\nn\nn\nn\nn\n")
 
         assert result.exit_code == 0
         prof = load_config().profiles["default"]
@@ -635,7 +639,7 @@ class TestTTYGuard:
 
         # Override the conftest `bypass_tty_guard` (which makes the guard a no-op) by
         # restoring the real implementation, then make _is_tty True. The wizard should
-        # reach product prompts (we just feed skip × 3 + n × 2 and verify exit 0).
+        # reach product prompts (we just feed skip × 3 + n × 4 and verify exit 0).
         from atlassian_skills.cli.setup import _ensure_interactive_terminal as real_guard
 
         monkeypatch.setattr(setup_mod, "_ensure_interactive_terminal", real_guard)
@@ -644,8 +648,8 @@ class TestTTYGuard:
         from atlassian_skills.cli.main import app
 
         runner = CliRunner()
-        # skip × 3 (jira/conf/bb) + n × 3 (decline agent installs).
-        result = runner.invoke(app, ["setup"], input="s\ns\ns\nn\nn\nn\n")
+        # skip × 3 (jira/conf/bb) + n × 4 (decline agent installs).
+        result = runner.invoke(app, ["setup"], input="s\ns\ns\nn\nn\nn\nn\n")
 
         assert result.exit_code == 0
         assert "interactive terminal" not in result.output
@@ -750,6 +754,59 @@ class TestCopilotInstall:
 
         assert result.exit_code == 0
         assert "installed-by: atls 0.2.7" in copilot_target.read_text(encoding="utf-8")
+
+
+class TestGigaCodeInstall:
+    def test_wizard_install_gigacode_writes_skill_md(self, wizard_env: Path) -> None:
+        from atlassian_skills.cli.main import app
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["setup"],
+            input=_wizard_input(
+                install_claude="n",
+                install_codex="n",
+                install_copilot="n",
+                install_gigacode="y",
+            ),
+        )
+
+        assert result.exit_code == 0
+        target = wizard_env / ".gigacode" / "skills" / "atls" / "SKILL.md"
+        assert target.exists()
+        assert "installed-by: atls" in target.read_text(encoding="utf-8")
+
+    def test_skills_only_does_not_install_gigacode_when_absent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import atlassian_skills.cli.setup as setup_mod
+
+        asset_root = _make_asset_root(tmp_path)
+        _stub_paths(monkeypatch, tmp_path, asset_root)
+
+        runner = CliRunner()
+        result = runner.invoke(setup_mod.setup_app, ["--skills-only"])
+
+        assert result.exit_code == 0
+        assert not (tmp_path / ".gigacode" / "skills" / "atls" / "SKILL.md").exists()
+
+    def test_skills_only_refreshes_gigacode_when_present(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import atlassian_skills.cli.setup as setup_mod
+
+        asset_root = _make_asset_root(tmp_path)
+        _stub_paths(monkeypatch, tmp_path, asset_root)
+        target = tmp_path / ".gigacode" / "skills" / "atls" / "SKILL.md"
+        target.parent.mkdir(parents=True)
+        target.write_text("<!-- stale marker -->", encoding="utf-8")
+
+        runner = CliRunner()
+        result = runner.invoke(setup_mod.setup_app, ["--skills-only"])
+
+        assert result.exit_code == 0
+        assert "installed-by: atls 0.2.7" in target.read_text(encoding="utf-8")
 
 
 class TestDoctorShowsCopilot:

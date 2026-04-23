@@ -177,6 +177,14 @@ def _get_copilot_config_dir() -> Path:
     return Path.home() / ".copilot"
 
 
+def _get_gigacode_config_dir() -> Path:
+    """GigaCode config directory. Resolution: GIGACODE_HOME > ~/.gigacode."""
+    env_dir = os.environ.get("GIGACODE_HOME")
+    if env_dir:
+        return Path(env_dir).expanduser()
+    return Path.home() / ".gigacode"
+
+
 def _get_agents_dir() -> Path:
     """Legacy ~/.agents directory (detection only)."""
     env_agents = os.environ.get("AGENTS_HOME")
@@ -193,6 +201,11 @@ def _get_codex_skill_target() -> Path:
 def _get_copilot_skill_target() -> Path:
     """Canonical GitHub Copilot skill target: <copilot_home>/skills/atls/SKILL.md."""
     return _get_copilot_config_dir() / "skills" / "atls" / "SKILL.md"
+
+
+def _get_gigacode_skill_target() -> Path:
+    """Canonical GigaCode skill target: <gigacode_home>/skills/atls/SKILL.md."""
+    return _get_gigacode_config_dir() / "skills" / "atls" / "SKILL.md"
 
 
 def _get_copilot_instructions_path() -> Path:
@@ -608,7 +621,7 @@ def _prompt_agent_install(label: str, default: bool = True) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _refresh_skills(*, claude: bool, codex: bool, copilot: bool = False) -> list[str]:
+def _refresh_skills(*, claude: bool, codex: bool, copilot: bool = False, gigacode: bool = False) -> list[str]:
     """Install canonical SKILL.md tree + inject routing blocks. Returns status messages."""
     msgs: list[str] = []
     if codex:
@@ -626,6 +639,8 @@ def _refresh_skills(*, claude: bool, codex: bool, copilot: bool = False) -> list
     if copilot:
         msgs.extend(_install_tree(_CANONICAL_SKILL_DIR, _get_copilot_skill_target().parent))
         msgs.append(_inject_copilot_instructions_block())
+    if gigacode:
+        msgs.extend(_install_tree(_CANONICAL_SKILL_DIR, _get_gigacode_skill_target().parent))
     return msgs
 
 
@@ -866,15 +881,21 @@ def _wizard() -> None:  # noqa: C901 — sequential narrative reads better than 
         _set_profile_storage("keyring")
         typer.echo("")
 
-    # AI agent step — defaults to Yes for all three agents. `atls upgrade` (--skills-only)
-    # still respects opt-in: it only refreshes Copilot when SKILL.md already exists, so
+    # AI agent step — defaults to Yes for all supported agents. `atls upgrade` (--skills-only)
+    # still respects opt-in: it only refreshes optional targets when SKILL.md already exists, so
     # existing Claude+Codex users aren't surprise-installed during a routine upgrade.
     typer.echo(f"[{len(_PRODUCTS) + 1}/{total_steps}] AI agent skills")
     install_claude = _prompt_agent_install("Install Claude Code skill", default=True)
     install_codex = _prompt_agent_install("Install Codex skill", default=True)
     install_copilot = _prompt_agent_install("Install GitHub Copilot skill", default=True)
-    if install_claude or install_codex or install_copilot:
-        for msg in _refresh_skills(claude=install_claude, codex=install_codex, copilot=install_copilot):
+    install_gigacode = _prompt_agent_install("Install GigaCode skill", default=True)
+    if install_claude or install_codex or install_copilot or install_gigacode:
+        for msg in _refresh_skills(
+            claude=install_claude,
+            codex=install_codex,
+            copilot=install_copilot,
+            gigacode=install_gigacode,
+        ):
             typer.echo(f"  {msg.strip()}")
     if install_copilot and _is_wsl():
         typer.echo(
@@ -889,9 +910,9 @@ def _wizard() -> None:  # noqa: C901 — sequential narrative reads better than 
     typer.echo("  • Tokens live in the OS keyring — no shell restart needed.")
     if env_products:
         typer.echo("  • Your environment-based tokens are unchanged and still take priority.")
-    if install_claude or install_codex:
+    if install_claude or install_codex or install_gigacode:
         typer.echo(
-            "  • AI agent skills: Claude Code / Codex auto-load `atls` on the next session. "
+            "  • AI agent skills: Claude Code / Codex / GigaCode auto-load `atls` on the next session. "
             "For an already-open session, start a new chat or reload skills."
         )
     typer.echo("")
@@ -924,7 +945,12 @@ def setup_entry(
     if ctx.invoked_subcommand is not None:
         return
     if skills_only:
-        for msg in _refresh_skills(claude=True, codex=True, copilot=_get_copilot_skill_target().exists()):
+        for msg in _refresh_skills(
+            claude=True,
+            codex=True,
+            copilot=_get_copilot_skill_target().exists(),
+            gigacode=_get_gigacode_skill_target().exists(),
+        ):
             typer.echo(msg)
         return
     # Reject non-default --profile: the wizard's URL/token storage paths are all keyed
@@ -964,6 +990,8 @@ def _show_paths() -> None:
     typer.echo(f"  Codex AGENTS.md path      : {_get_codex_agents_path()}")
     typer.echo(f"  Codex skill target        : {_get_codex_skill_target()}  (canonical)")
     typer.echo(f"  Codex legacy skill target : {_get_codex_legacy_target()}  (detection only)")
+    typer.echo(f"  GigaCode config dir       : {_get_gigacode_config_dir()}")
+    typer.echo(f"  GigaCode skill target     : {_get_gigacode_skill_target()}")
 
 
 @setup_app.command("codex")
@@ -982,11 +1010,19 @@ def setup_claude() -> None:
         typer.echo(msg)
 
 
+@setup_app.command("gigacode")
+def setup_gigacode() -> None:
+    """[deprecated] Install atls skill for GigaCode. Use `atls setup` (wizard) instead."""
+    _emit_deprecation("gigacode")
+    for msg in _refresh_skills(claude=False, codex=False, gigacode=True):
+        typer.echo(msg)
+
+
 @setup_app.command("all")
 def setup_all() -> None:
-    """[deprecated] Install skills for both Codex and Claude Code. Use `atls setup` instead."""
+    """[deprecated] Install skills for Codex, Claude Code, and GigaCode. Use `atls setup` instead."""
     _emit_deprecation("all")
-    for msg in _refresh_skills(claude=True, codex=True):
+    for msg in _refresh_skills(claude=True, codex=True, gigacode=True):
         typer.echo(msg)
 
 
@@ -1006,6 +1042,7 @@ def setup_status() -> None:
         ("Claude command (legacy)", _get_claude_command_target()),
         ("Codex skill", _get_codex_skill_target()),
         ("Codex legacy skill", _get_codex_legacy_target()),
+        ("GigaCode skill", _get_gigacode_skill_target()),
     ]:
         if target.exists():
             content = target.read_text(encoding="utf-8")
