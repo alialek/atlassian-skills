@@ -1,14 +1,14 @@
 ---
 name: atls
 description: |
-  ALL Atlassian work — Jira, Confluence, Bitbucket on Server/DC
-  (지라/컨플루언스/비트버킷). Load BEFORE the first atls command.
+  ALL Atlassian work — Jira, Confluence, Bitbucket, Zephyr on Server/DC
+  (지라/컨플루언스/비트버킷/지파이어). Load BEFORE the first atls command.
 
   Without this body, you WILL guess atls conventions wrong: JQL/CQL is
   positional (not --jql), --format=json (not -f json — `-f` is
   --md-file), push-md vs page update, exit 5 = stale-version.
 
-  TRIGGER: Jira, Confluence, Bitbucket, atls, JQL, CQL, PROJ-123,
+  TRIGGER: Jira, Confluence, Bitbucket, Zephyr, atls, JQL, CQL, PROJ-123,
   지라, 컨플루언스, 비트버킷, 아틀라시안.
 ---
 
@@ -53,6 +53,14 @@ atls
 │   ├── file         get
 │   ├── comment      add, reply, update, delete, resolve, reopen
 │   └── task         list, get, create, update, delete
+└── zephyr
+    ├── testcase     get, list, create, update, delete
+    ├── testresult   get, list, create
+    ├── testplan     get, list, create, add-testcases
+    ├── testrun      get, list, create
+    ├── folder       list, create
+    ├── environment  list, create
+    └── issuelink    testcases
 ```
 
 ## Format selection
@@ -91,6 +99,11 @@ atls confluence page push-md ID --md-file page.md --if-version 15
 atls confluence page push-md ID --md-file page.md --asset-dir=assets/
 atls confluence page pull-md ID --output page.md --resolve-assets=sidecar --asset-dir=assets/
 atls confluence page diff-local ID page.md --passthrough-prefix workflow:
+
+# Zephyr Scale
+atls zephyr testcase get KEY
+atls zephyr testcase list --project-key PROJ --limit=20
+atls zephyr testresult create --data-json '{"testCaseKey":"PROJ-T1","status":"Pass"}' --dry-run
 ```
 
 ## Write safety

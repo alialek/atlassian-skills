@@ -28,6 +28,7 @@ First-class integration with **Claude Code**, **Codex**, and **GitHub Copilot**.
 | Server/DC support | Partial | Full (primary target) |
 | AI agent setup | Manual MCP config | One interactive wizard (`atls setup`) for Claude Code + Codex + GitHub Copilot |
 | Bitbucket Server | Not supported | Full (0.2.0) — PR workflow, comments, tasks, build status |
+| Zephyr Scale | Not supported | Server/DC test cases, runs, plans, folders, environments |
 | Bamboo | Not supported | Planned (0.3.0) |
 
 ## Quick install
@@ -68,18 +69,21 @@ If you'd rather skip the wizard and set everything by hand:
 - **Jira**: Profile → Personal Access Tokens → Create
 - **Confluence**: Profile → Personal Access Tokens → Create
 - **Bitbucket**: Profile → Manage Account → HTTP access tokens → Create (permissions: project read, repository read/write)
+- **Zephyr Scale**: Use the Jira/Zephyr Server/DC token accepted by your Zephyr REST API.
 
 **2. Configure server URLs**
 ```bash
 atls config set profiles.default.jira_url https://your-jira.example.com
 atls config set profiles.default.confluence_url https://your-confluence.example.com
 atls config set profiles.default.bitbucket_url https://your-bitbucket.example.com
+atls config set profiles.default.zephyr_url https://your-jira.example.com
 ```
 Or via environment variables:
 ```bash
 export ATLS_DEFAULT_JIRA_URL="https://your-jira.example.com"
 export ATLS_DEFAULT_CONFLUENCE_URL="https://your-confluence.example.com"
 export ATLS_DEFAULT_BITBUCKET_URL="https://your-bitbucket.example.com"
+export ATLS_DEFAULT_ZEPHYR_URL="https://your-jira.example.com"
 ```
 For non-default profiles, replace `DEFAULT` with the profile name (e.g. `ATLS_CORP_JIRA_URL`).
 
@@ -89,11 +93,13 @@ For non-default profiles, replace `DEFAULT` with the profile name (e.g. `ATLS_CO
 export JIRA_PERSONAL_TOKEN="your-jira-pat"
 export CONFLUENCE_PERSONAL_TOKEN="your-confluence-pat"
 export BITBUCKET_TOKEN="your-bitbucket-http-access-token"
+export ATLS_DEFAULT_ZEPHYR_TOKEN="your-zephyr-token"
 
 # Multi-profile
 export ATLS_CORP_JIRA_TOKEN="..."
 export ATLS_CORP_CONFLUENCE_TOKEN="..."
 export ATLS_CORP_BITBUCKET_TOKEN="..."
+export ATLS_CORP_ZEPHYR_TOKEN="..."
 ```
 
 **File-based storage (manual — for the security-conscious without a keyring)**
@@ -250,6 +256,11 @@ atls confluence page search "space=DOCS AND title=API"
 atls confluence page push-md 12345 --md-file=page.md --if-version 15
 atls confluence page pull-md 12345 --output=page.md --resolve-assets=sidecar --asset-dir=assets/
 
+# Zephyr Scale
+atls zephyr testcase get PROJ-T1
+atls zephyr testcase list --project-key PROJ --limit=20
+atls zephyr testresult create --data-json '{"testCaseKey":"PROJ-T1","status":"Pass"}' --dry-run
+
 # Jira description from markdown
 atls jira issue update PROJ-1 --body-file=desc.md --body-format=md --heading-promotion=jira
 
@@ -354,6 +365,17 @@ atls jira issue get PROJ-1 --format=json
 - `bitbucket task list|get|create|update|delete`
 
 > All write commands support `--dry-run`. PR diff and file get treat `--format=md` as raw text passthrough.
+
+### Zephyr Scale
+- `zephyr testcase get|list|create|update|delete`
+- `zephyr testresult get|list|create`
+- `zephyr testplan get|list|create|add-testcases`
+- `zephyr testrun get|list|create`
+- `zephyr folder list|create`
+- `zephyr environment list|create`
+- `zephyr issuelink testcases`
+
+> Zephyr uses `/rest/atm/1.0` on the configured Jira/Zephyr Server/DC URL. Write commands accept `--data-json` and support `--dry-run`.
 
 ### Utility
 - `setup` — interactive wizard (URLs, tokens, Claude/Codex skill, auto-verify)
