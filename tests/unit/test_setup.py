@@ -184,6 +184,28 @@ class TestSetupCodex:
         assert "ATLS Codex block" in result.output
 
 
+class TestSetupGigaCode:
+    def test_setup_gigacode_installs_skill(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import atlassian_skills.cli.setup as setup_mod
+
+        asset_root = tmp_path / "assets"
+        source_dir = asset_root / "codex"
+        source_dir.mkdir(parents=True)
+        (source_dir / "SKILL.md").write_text("<!-- installed-by: atls 0.1.0 -->", encoding="utf-8")
+
+        monkeypatch.setattr(setup_mod, "ASSETS_DIR", asset_root)
+        monkeypatch.setattr(
+            setup_mod, "_get_gigacode_skill_target", lambda: tmp_path / ".gigacode" / "skills" / "atls" / "SKILL.md"
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(setup_mod.setup_app, ["gigacode"])
+
+        assert result.exit_code == 0
+        assert (tmp_path / ".gigacode" / "skills" / "atls" / "SKILL.md").exists()
+        assert ".gigacode" in result.output
+
+
 class TestStatus:
     def test_status_not_installed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))

@@ -105,6 +105,22 @@ def _get_codex_config_dir() -> Path:
     return Path.home() / ".codex"
 
 
+def _get_gigacode_config_dir() -> Path:
+    """GigaCode config directory.
+
+    Resolution order:
+    1. Interactive override
+    2. GIGACODE_HOME environment variable
+    3. ~/.gigacode on all platforms
+    """
+    if "gigacode" in _OVERRIDES:
+        return _OVERRIDES["gigacode"]
+    env_dir = os.environ.get("GIGACODE_HOME")
+    if env_dir:
+        return Path(env_dir).expanduser()
+    return Path.home() / ".gigacode"
+
+
 def _get_agents_dir() -> Path:
     """Agents config directory (~/.agents by default)."""
     if "agents" in _OVERRIDES:
@@ -128,6 +144,11 @@ def _get_codex_legacy_target() -> Path:
 def _get_codex_agents_path() -> Path:
     """User-level Codex global instructions file."""
     return _get_codex_config_dir() / "AGENTS.md"
+
+
+def _get_gigacode_skill_target() -> Path:
+    """GigaCode skill target: <gigacode_config>/skills/atls/SKILL.md."""
+    return _get_gigacode_config_dir() / "skills" / "atls" / "SKILL.md"
 
 
 def _get_claude_target() -> Path:
@@ -219,6 +240,7 @@ def _prompt_override(label: str, key: str, current: Path) -> None:
                 {
                     "claude": "CLAUDE_CONFIG_DIR",
                     "codex": "CODEX_HOME",
+                    "gigacode": "GIGACODE_HOME",
                     "agents": "AGENTS_HOME",
                 }[key]
             )
@@ -241,6 +263,7 @@ def _prompt_all_overrides() -> None:
     typer.echo(f"Detected platform: {_detect_platform()}")
     _prompt_override("Claude config dir", "claude", _get_claude_config_dir())
     _prompt_override("Codex config dir", "codex", _get_codex_config_dir())
+    _prompt_override("GigaCode config dir", "gigacode", _get_gigacode_config_dir())
     _prompt_override("Agents dir (Codex skill target)", "agents", _get_agents_dir())
     typer.echo("")
 
@@ -255,10 +278,13 @@ def _show_paths() -> None:
     typer.echo(f"  Codex AGENTS.md path   : {_get_codex_agents_path()}")
     typer.echo(f"  Codex skill target     : {_get_codex_skill_target()}")
     typer.echo(f"  Codex legacy target    : {_get_codex_legacy_target()}")
+    typer.echo(f"  GigaCode config dir    : {_get_gigacode_config_dir()}")
+    typer.echo(f"  GigaCode skill target  : {_get_gigacode_skill_target()}")
     typer.echo("")
     typer.echo("Override via environment variables:")
     typer.echo("  CLAUDE_CONFIG_DIR  — Claude Code config directory")
     typer.echo("  CODEX_HOME         — Codex config directory")
+    typer.echo("  GIGACODE_HOME      — GigaCode config directory")
     typer.echo("  AGENTS_HOME        — Agents skill directory")
     typer.echo("Or run `atls setup <target> --interactive` to override at install time.")
 
@@ -276,6 +302,18 @@ def setup_codex(
     for msg in _install_tree(source_dir, _get_codex_legacy_target().parent):
         typer.echo(msg)
     typer.echo(_inject_codex_agents_block())
+
+
+@setup_app.command("gigacode")
+def setup_gigacode(
+    interactive: bool = typer.Option(False, "--interactive", "-i", help="Prompt for path overrides"),
+) -> None:
+    """Install atls skill for GigaCode."""
+    if interactive:
+        _prompt_all_overrides()
+    source_dir = ASSETS_DIR / "codex"
+    for msg in _install_tree(source_dir, _get_gigacode_skill_target().parent):
+        typer.echo(msg)
 
 
 @setup_app.command("claude")
@@ -299,10 +337,11 @@ def setup_claude(
 def setup_all(
     interactive: bool = typer.Option(False, "--interactive", "-i", help="Prompt for path overrides"),
 ) -> None:
-    """Install skills for both Codex and Claude Code."""
+    """Install skills for Codex, GigaCode, and Claude Code."""
     if interactive:
         _prompt_all_overrides()
     setup_codex(interactive=False)  # overrides already set
+    setup_gigacode(interactive=False)
     setup_claude(interactive=False)
 
 
@@ -318,6 +357,7 @@ def setup_status() -> None:
     for name, target in [
         ("Codex skill", _get_codex_skill_target()),
         ("Codex legacy skill", _get_codex_legacy_target()),
+        ("GigaCode skill", _get_gigacode_skill_target()),
         ("Claude command", _get_claude_target()),
     ]:
         if target.exists():
