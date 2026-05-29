@@ -22,9 +22,6 @@ _ATLS_CODEX_BLOCK_END = "<!-- ATLS-CODEX:END -->"
 _ATLS_COPILOT_BLOCK_START = "<!-- ATLS-COPILOT:START -->"
 _ATLS_COPILOT_BLOCK_END = "<!-- ATLS-COPILOT:END -->"
 
-_SHELL_RC_BLOCK_START = "# >>> atls env >>>"
-_SHELL_RC_BLOCK_END = "# <<< atls env <<<"
-
 # Reuse the single source of truth for legacy token env-var names. core/config.py
 # uses this same dict for `get_env_token` fallback lookup; importing here keeps the
 # two ends (wizard writes / auth reads) in lockstep.
@@ -110,7 +107,7 @@ def _is_git_bash() -> bool:
 
 
 def _is_fish() -> bool:
-    """Detect fish shell. fish writes a different `set -gx` syntax — wizard refuses."""
+    """Detect fish shell (used by `atls doctor` for shell display)."""
     if os.environ.get("FISH_VERSION"):
         return True
     shell = os.environ.get("SHELL", "")
@@ -144,21 +141,6 @@ def _detect_shell() -> str:
     if shell.endswith("/bash"):
         return "bash"
     return "sh"
-
-
-def _shell_rc_path() -> Path:
-    """Return the rc file the wizard appends an env block to.
-
-    Windows is handled by `_save_tokens_windows` instead — this is Unix-only.
-    fish is rejected upstream by `_is_fish` so we never reach this with shell='fish'.
-    """
-    shell = _detect_shell()
-    home = Path.home()
-    if shell == "zsh":
-        return home / ".zshrc"
-    if shell == "bash":
-        return home / ".bashrc"
-    return home / ".profile"  # POSIX fallback for unknown shells
 
 
 # ---------------------------------------------------------------------------
@@ -414,120 +396,91 @@ def _emit_deprecation(command: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Token storage — Unix (file-based) + Windows (winreg)
+# Token storage — keyring (0.2.8)
 # ---------------------------------------------------------------------------
 
 
-def _secrets_dir() -> Path:
-    """Standard file-based secrets directory."""
-    return Path.home() / ".secrets"
+def _detect_headless() -> list[str]:
+    """Return advisory signals that an OS keyring backend may be locked / unavailable.
 
-
-def _save_token_unix(product: str, token: str) -> Path:
-    """Write ~/.secrets/{product}_pat (mode 0o600) AND update current process env.
-
-    Updating `os.environ` is critical — the wizard's final `auth_status` verification
-    runs in the same Python process, before any shell `source ~/.zshrc`. Without this,
-    the freshly-saved token wouldn't be visible to the verification step.
-
-    Uses tempfile + atomic `os.replace` so the new token never sits at a wider mode:
-    `os.open(O_CREAT, 0o600)` would inherit a pre-existing file's mode until the
-    trailing `os.chmod` ran, leaving a brief window where the new token is readable
-    on a shared host.
+    None of these are definitive — they are hints the wizard surfaces before the user
+    commits to keyring storage in an environment where it frequently cannot unlock
+    (Docker, WSL, headless server, text-only SSH). The user can still proceed.
     """
-    import contextlib
-    import tempfile
-
-    secrets = _secrets_dir()
-    secrets.mkdir(mode=0o700, exist_ok=True)
-    path = secrets / f"{product}_pat"
-
-    fd, tmp_str = tempfile.mkstemp(dir=str(secrets), prefix=f".{product}_pat.", text=False)
-    tmp_path = Path(tmp_str)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(token)
-        os.replace(tmp_path, path)  # atomic on POSIX
-    except Exception:
-        if tmp_path.exists():
-            with contextlib.suppress(OSError):
-                tmp_path.unlink()
-        raise
-    # Same-process env update — see docstring.
-    os.environ[_TOKEN_ENV_NAMES[product]] = token
-    return path
+    signals: list[str] = []
+    if Path("/.dockerenv").exists():
+        signals.append("running inside Docker (/.dockerenv present)")
+    if os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"):
+        signals.append("WSL2 — the native Windows credential store is separate from this session")
+    if sys.platform.startswith("linux") and not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+        signals.append("no D-Bus session bus — likely no desktop session, so GNOME Keyring / KWallet stays locked")
+    if os.environ.get("SSH_CONNECTION") and not os.environ.get("DISPLAY"):
+        signals.append("SSH session without DISPLAY (text-only)")
+    return signals
 
 
-def _build_shell_env_block(secrets_paths: dict[str, Path]) -> str:
-    """Build an idempotent bash/zsh-compatible source block for secrets files."""
-    home = Path.home()
-    lines = [_SHELL_RC_BLOCK_START]
-    for product in _PRODUCTS:
-        if product not in secrets_paths:
-            continue
-        path = secrets_paths[product]
-        try:
-            rel = path.relative_to(home)
-            disp = f"~/{rel}"
-        except ValueError:
-            disp = str(path)
-        env_name = _TOKEN_ENV_NAMES[product]
-        lines.append(f'[ -f {disp} ] && export {env_name}="$(cat {disp})"')
-    lines.append(_SHELL_RC_BLOCK_END)
-    return "\n".join(lines)
+def _detect_installer() -> str:
+    """Best-effort guess at how atls was installed, to print the matching keyring-extra command."""
+    # Check BOTH the raw and the symlink-resolved path: a uv tool venv's python is a symlink
+    # into the shared `…/uv/python/<cpython>/bin` dir, so resolve() alone drops the `/uv/tools/`
+    # marker and would misreport uv installs as pip.
+    raw = str(Path(sys.executable)).replace("\\", "/")
+    resolved = str(Path(sys.executable).resolve()).replace("\\", "/")
+    haystack = f"{raw}\n{resolved}"
+    if "/uv/tools/" in haystack or "/uv/tool/" in haystack:
+        return "uv"
+    if "pipx" in haystack:
+        return "pipx"
+    return "pip"
 
 
-def _inject_shell_env_block(secrets_paths: dict[str, Path]) -> str:
-    """Append/replace the atls env block in ~/.zshrc or ~/.bashrc."""
-    rc = _shell_rc_path()
-    block = _build_shell_env_block(secrets_paths)
-    return _inject_marked_block(
-        path=rc,
-        start_marker=_SHELL_RC_BLOCK_START,
-        end_marker=_SHELL_RC_BLOCK_END,
-        block=block,
-        label="ATLS env block",
-    )
+def _keyring_install_hint() -> str:
+    """The exact install command for the optional keyring extra, matched to the installer."""
+    return {
+        "uv": 'uv tool install --force "atlassian-skills[keyring]"',
+        "pipx": "pipx inject atlassian-skills keyring",
+        "pip": 'pip install "atlassian-skills[keyring]"',
+    }[_detect_installer()]
 
 
-def _save_tokens_windows(env_vars: dict[str, str]) -> None:
-    """Write env vars to HKCU\\Environment, broadcast WM_SETTINGCHANGE, update os.environ.
+def _save_token_keyring(profile_name: str, product: str, token: str) -> None:
+    """Store a token in the OS keyring under the exact key the resolver reads.
 
-    Works identically from cmd, PowerShell 5/7, and Git Bash — the registry key is the
-    same single source of truth for user-scoped env vars on Windows.
+    Service `atls-<profile>`, account `<product>_token` — must stay in lockstep with
+    `core.auth._resolve_token_from_provider`, which calls
+    `keyring.get_password(f"atls-{profile_name}", f"{product}_token")`.
     """
-    if sys.platform != "win32":
-        return
-    import ctypes
-    import winreg  # type: ignore[import-not-found]
+    import keyring  # noqa: PLC0415 — optional dep, imported lazily; ImportError handled by caller
 
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE) as key:
-        for name, value in env_vars.items():
-            winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+    keyring.set_password(f"atls-{profile_name}", f"{product}_token", token)
 
-    # Best-effort broadcast so newly-spawned processes pick up the change. Already-running
-    # shells won't see it — they snapshot the env block at process start.
-    hwnd_broadcast = 0xFFFF
-    wm_settingchange = 0x001A
-    smto_abortifhung = 0x0002
+
+def _delete_token_keyring(profile_name: str, product: str) -> bool:
+    """Best-effort removal of a keyring entry (used by the `[r]emove` action).
+
+    Returns True only when an entry was actually deleted. A missing entry, an absent
+    backend, or a locked store all return False — the caller phrases its message off this
+    so it never claims to have cleared something that wasn't there.
+    """
     try:
-        result = ctypes.c_ulong()
-        ctypes.windll.user32.SendMessageTimeoutW(  # type: ignore[attr-defined]
-            hwnd_broadcast,
-            wm_settingchange,
-            0,
-            ctypes.c_wchar_p("Environment"),
-            smto_abortifhung,
-            5000,
-            ctypes.byref(result),
-        )
-    except Exception:
-        pass
+        import keyring  # noqa: PLC0415
 
-    # Same-process env update so the verification step sees the new values.
-    for name, value in env_vars.items():
-        os.environ[name] = value
+        keyring.delete_password(f"atls-{profile_name}", f"{product}_token")
+        return True
+    except Exception:
+        return False
+
+
+def _set_profile_storage(storage: str) -> None:
+    """Persist the storage mode to [profiles.default]."""
+    from atlassian_skills.core.config import Profile, load_config, save_config
+
+    config = load_config()
+    if "default" not in config.profiles:
+        config.profiles["default"] = Profile()
+    prof = config.profiles["default"]
+    prof.storage = storage  # type: ignore[assignment]  # validated set: env|keyring|command
+    save_config(config)
 
 
 # ---------------------------------------------------------------------------
@@ -549,129 +502,20 @@ def _existing_url_state(profile_name: str = "default") -> dict[str, tuple[str | 
     return {p: _resolve_url(profile_name, p, url_fields[p]) for p in _PRODUCTS}
 
 
-def _existing_tokens(profile_name: str = "default") -> dict[str, int]:
-    """Return token lengths (never raw values) — **env vars only**.
+def _env_token_var(product: str, profile_name: str = "default") -> str | None:
+    """Return the name of whichever token env var is actually set for `product`, or None.
 
-    `~/.secrets/*_pat` files are *not* a fallback here. The user must source their shell
-    rc (or open a new terminal) for the wizard-managed tokens to become visible; reading
-    the file directly would falsely report tokens as 'set' for users who intentionally
-    removed the export line from their rc. File/env mismatch is surfaced separately as a
-    one-line banner by `_orphan_token_files()`.
+    Prefers the new `ATLS_<PROFILE>_<PRODUCT>_TOKEN` form when set, else the legacy name
+    from `_TOKEN_ENV_NAMES`. Mirrors `get_env_token`'s resolution order so the wizard names
+    the exact variable the resolver reads.
     """
-    from atlassian_skills.core.config import get_env_token
-
-    out: dict[str, int] = {}
-    for p in _PRODUCTS:
-        token = get_env_token(profile_name, p)
-        out[p] = len(token) if token else 0
-    return out
-
-
-def _orphan_token_files() -> list[str]:
-    """Return product names whose ~/.secrets/{p}_pat exists but no env var is loaded.
-
-    Used to print an informational banner: the user likely needs `source ~/.zshrc` to
-    pick the tokens up, or wants to delete a stale file.
-    """
-    from atlassian_skills.core.config import get_env_token
-
-    orphans: list[str] = []
-    secrets = _secrets_dir()
-    for p in _PRODUCTS:
-        if get_env_token("default", p):
-            continue
-        if (secrets / f"{p}_pat").exists():
-            orphans.append(p)
-    return orphans
-
-
-def _existing_file_state() -> dict[str, bool]:
-    """Return whether each product has a `~/.secrets/{product}_pat` on disk.
-
-    Wizard uses this so the [k/e/r/s] menu (which exposes the [r]emove action that the
-    orphan banner promises) is reachable even when there's no URL and no env var loaded.
-    """
-    secrets = _secrets_dir()
-    return {p: (secrets / f"{p}_pat").exists() for p in _PRODUCTS}
-
-
-def _detect_atls_default_shadowing(saved_products: list[str]) -> list[str]:
-    """Warn when the wizard wrote `JIRA_PERSONAL_TOKEN` etc. but `ATLS_DEFAULT_*_TOKEN`
-    is also set in env. `get_env_token` prefers the ATLS_* form, so the wizard's value
-    is silently overridden in every subsequent `atls` invocation.
-    """
-    warnings: list[str] = []
-    for product in saved_products:
-        atls_var = f"ATLS_DEFAULT_{product.upper()}_TOKEN"
-        if os.environ.get(atls_var):
-            warnings.append(
-                f"{atls_var} is set in your environment and takes priority over the "
-                f"wizard-managed {_TOKEN_ENV_NAMES[product]}. The new token won't be "
-                f"used until you `unset {atls_var}` (or remove it from your shell rc)."
-            )
-    return warnings
-
-
-def _existing_secrets_paths() -> dict[str, Path]:
-    """Return `~/.secrets/{product}_pat` paths that actually exist on disk."""
-    secrets = _secrets_dir()
-    out: dict[str, Path] = {}
-    for p in _PRODUCTS:
-        candidate = secrets / f"{p}_pat"
-        if candidate.exists():
-            out[p] = candidate
-    return out
-
-
-def _inject_shell_env_block_from_disk() -> str:
-    """Rebuild the shell rc block from ALL existing ~/.secrets/*_pat files on disk.
-
-    Prevents the v4 bug where setting a fresh Bitbucket token wiped the previously-saved
-    Jira/Confluence exports — the previous version rebuilt the block from in-memory new
-    tokens only, so any product not touched in this wizard run lost its export line.
-    """
-    paths = _existing_secrets_paths()
-    if not paths:
-        return f"  no token files in {_secrets_dir()} — shell rc block left unchanged"
-    return _inject_shell_env_block(paths)
-
-
-def _detect_rc_shadowing() -> list[str]:
-    """Warn if a token env var is exported manually outside the atls-managed block.
-
-    Catches the common foot-gun where a user kept an old `export JIRA_PERSONAL_TOKEN=…`
-    line they wrote by hand. Depending on its position relative to the atls block, it
-    can silently override the wizard-managed value.
-
-    ATLS_DEFAULT_*_TOKEN shadowing is intentionally NOT checked here — that's an
-    advanced multi-profile setup and documented in the README priority table.
-    """
-    warnings: list[str] = []
-    if sys.platform == "win32":
-        return warnings
-    rc = _shell_rc_path()
-    if not rc.exists():
-        return warnings
-    try:
-        content = rc.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return warnings
-    # Strip the atls-managed block so we only inspect user-authored lines
-    pattern = re.compile(
-        re.escape(_SHELL_RC_BLOCK_START) + r".*?" + re.escape(_SHELL_RC_BLOCK_END),
-        re.DOTALL,
-    )
-    stripped = pattern.sub("", content)
-    for env_name in _TOKEN_ENV_NAMES.values():
-        if re.search(rf"^\s*export\s+{re.escape(env_name)}\s*=", stripped, re.MULTILINE):
-            warnings.append(
-                f"{env_name} is also exported in {rc} outside the atls block. "
-                "Depending on line order this may override the wizard-managed token — "
-                "consider removing the manual export.\n"
-                "  (False positive? This is a plain regex scan — if the match is inside "
-                "a heredoc, function body, or quoted string that doesn't run at shell init, ignore.)"
-            )
-    return warnings
+    atls_var = f"ATLS_{profile_name.upper()}_{product.upper()}_TOKEN"
+    if os.environ.get(atls_var):
+        return atls_var
+    legacy = _TOKEN_ENV_NAMES.get(product)
+    if legacy and os.environ.get(legacy):
+        return legacy
+    return None
 
 
 def _pat_issuer_hint(product: str) -> str:
@@ -790,88 +634,81 @@ def _refresh_skills(*, claude: bool, codex: bool, copilot: bool = False) -> list
 # ---------------------------------------------------------------------------
 
 
-def _print_fish_abort() -> None:
-    typer.echo(
-        "✗ fish shell detected. atls setup writes bash/zsh-compatible rc lines and\n"
-        "  does not yet support fish's `set -gx` syntax. Workarounds:\n"
-        "    1. Set the three env vars manually in ~/.config/fish/config.fish, or\n"
-        "    2. Re-run `atls setup` from a bash/zsh session.\n"
-        "    3. For skill-only install: `atls setup --skills-only`",
-        err=True,
-    )
-
-
 def _wizard_product_step(  # noqa: C901 — sequential prompt narrative reads better inline
     product: str,
     index: int,
     total: int,
     url_state: dict[str, tuple[str | None, str | None]],
-    token_state: dict[str, int],
-    file_state: dict[str, bool],
+    env_products: list[str],
 ) -> tuple[tuple[str | None, str], str | None]:
-    """Walk one product (Jira/Confluence/Bitbucket) through its URL+PAT prompts.
+    """Walk one product (Jira/Confluence/Bitbucket) through its URL + secret prompts.
 
-    Returns ((url, url_action), new_token_or_None). `url_action` ∈ {'set', 'keep', 'skip',
-    'clear-config', 'clear-env-noop'}. `new_token` is a freshly-entered raw token, or None
-    if the user kept the existing one / had none to begin with.
+    Returns ((url, url_action), new_secret_or_None). `url_action` ∈ {'set', 'keep', 'skip',
+    'clear-config', 'clear-env-noop'}. The second element is the freshly-entered raw PAT to
+    store in the OS keyring, or None when the user kept the existing one / skipped / the
+    product's token already lives in the environment (env outranks keyring — see `env_products`).
     """
     label = product.capitalize()
     current_url, source = url_state[product]
-    token_len = token_state.get(product, 0)
-    has_token = token_len > 0
-    has_file = file_state.get(product, False)
+    in_env = product in env_products
 
     typer.echo(f"[{index}/{total}] {label}")
     if current_url:
         typer.echo(f"  URL: {current_url}  ({source})")
     else:
         typer.echo("  URL: not configured")
-    if has_token:
-        typer.echo(f"  PAT: set (length={token_len})")
-    elif has_file:
-        typer.echo(f"  PAT: file ~/.secrets/{product}_pat present (env var not loaded)")
+    # PAT display. A live env token always shadows the keyring (env > keyring), so the wizard
+    # never writes a keyring entry for an env product — it says so plainly instead. Otherwise the
+    # token lives in the keyring (we don't probe it here — that would trigger a per-product unlock
+    # prompt; the final `--resolve` verify probes once).
+    if in_env:
+        varname = _env_token_var(product)
+        typer.echo(f"  PAT: environment variable ({varname}) — atls uses this; keyring skipped")
     else:
-        typer.echo("  PAT: not set")
+        typer.echo("  PAT: keyring — not checked here; [e]dit to set/replace (verify at the end shows what resolves)")
 
-    # Show the [k/e/r/s] menu whenever ANY state exists (URL, env token, OR orphan file).
-    # This is what makes the orphan-banner's `[r]emove below` promise actually reachable
-    # when the user only has a stale file and no URL/env var.
-    if current_url or has_token or has_file:
-        options = "[k]eep / [e]dit / [r]emove / [s]kip"
-        default = "k"
+    # Menu verbs: `skip` (leave as-is / don't configure — the no-op), `edit` (add or change
+    # URL + keyring token), `remove` (delete). `skip`/`edit`/`remove` are shown whenever ANY
+    # state exists (URL configured or token in the environment).
+    #
+    # Default: `skip` when a URL is configured (Enter keeps it as-is); else `edit` to nudge the
+    # user to set the URL. (Legacy `k`/`a` inputs are still accepted as aliases for skip/edit.)
+    if current_url or in_env:
+        options = "[s]kip / [e]dit / [r]emove"
+        default = "s" if current_url else "e"
     else:
-        options = "[a]dd / [s]kip"
+        options = "[s]kip / [e]dit"
         default = "s"
     choice = typer.prompt(f"  {options} [default={default}]", default=default, show_default=False).strip().lower()
 
-    if choice in ("k", "keep") or (choice in ("s", "skip") and (current_url or has_token)):
+    if choice in ("k", "keep") or (choice in ("s", "skip") and (current_url or in_env)):
         typer.echo("")
         return (current_url, "keep") if current_url else (None, "skip"), None
-    if choice in ("s", "skip") and not (current_url or has_token):
+    if choice in ("s", "skip") and not (current_url or in_env):
         typer.echo("")
         return (None, "skip"), None
     if choice in ("r", "remove"):
-        # Token file gets deleted regardless of URL source — the orphan banner promised
-        # this, and keeping a stale ~/.secrets/{p}_pat after the user explicitly chose
-        # `r` would be surprising.
-        token_path = _secrets_dir() / f"{product}_pat"
-        token_removed = False
-        if token_path.exists():
-            try:
-                token_path.unlink()
-                token_removed = True
-            except OSError as e:
-                typer.echo(f"  ⚠ failed to delete {token_path}: {e}", err=True)
+        # Best-effort clear of the keyring entry. We never touch env vars or shell rc files —
+        # those are the user's manual setup; they unset them themselves.
+        removed = _delete_token_keyring("default", product)
+        if removed:
+            typer.echo(f"  → cleared {label} keyring entry")
+        if in_env:
+            # The live credential is an env var the wizard never manages — say so, otherwise the
+            # user thinks `remove` killed it while atls keeps resolving the (still-set) env token.
+            varname = _env_token_var(product)
+            typer.echo(
+                f"  ⚠ {label} token comes from {varname} (environment) and is still active — "
+                "unset it + open a new terminal to fully remove."
+            )
+        elif not removed:
+            typer.echo(f"  → no {label} keyring entry to remove")
 
         if source == "config":
             typer.echo("  → URL removed from config.toml")
-            if token_removed:
-                typer.echo(f"    Deleted token file ~/.secrets/{product}_pat")
             typer.echo("")
             return (None, "clear-config"), None
         if source and source.startswith("env"):
-            if token_removed:
-                typer.echo(f"  → Deleted token file ~/.secrets/{product}_pat")
             typer.echo(
                 f"  ⚠ {label} URL is set via {source}; the wizard cannot permanently "
                 "unset shell env vars. Remove that line from your shell rc manually.",
@@ -879,11 +716,6 @@ def _wizard_product_step(  # noqa: C901 — sequential prompt narrative reads be
             )
             typer.echo("")
             return (current_url, "clear-env-noop"), None
-        # No URL at all — pure orphan token file cleanup.
-        if token_removed:
-            typer.echo(f"  → Deleted token file ~/.secrets/{product}_pat")
-        else:
-            typer.echo("  → nothing to remove (no current value, no token file)")
         typer.echo("")
         return (None, "skip"), None
     if choice in ("e", "edit", "a", "add"):
@@ -908,18 +740,30 @@ def _wizard_product_step(  # noqa: C901 — sequential prompt narrative reads be
             typer.echo("")
             return (None, "skip"), None
 
+        # A live env token shadows any keyring entry, so don't prompt for / store one. Save the
+        # URL but leave the token in the environment (the user moves it to the keyring by hand).
+        if in_env:
+            varname = _env_token_var(product)
+            typer.echo(
+                f"  → {label} token stays in the environment; unset {varname} + new terminal to use the keyring instead"
+            )
+            typer.echo("")
+            return (new_url_raw, "set"), None
+
         # PAT issuer hint — written instruction, no guessed URL (varies by deployment)
         typer.echo(f"  Generate a PAT: {_pat_issuer_hint(product)}")
-
-        if has_token:
-            pat_prompt = f"  {label} PAT [set, Enter to keep]"
-        else:
-            pat_prompt = f"  {label} PAT (hidden — typed characters won't appear, blank to skip)"
-        new_token = typer.prompt(pat_prompt, default="", hide_input=True, show_default=False).strip()
+        new_token = typer.prompt(
+            f"  {label} PAT (hidden — typed characters won't appear, blank to skip)",
+            default="",
+            hide_input=True,
+            show_default=False,
+        ).strip()
         typer.echo("")
         return (new_url_raw, "set"), (new_token or None)
 
-    typer.echo(f"  Unknown choice '{choice}', treating as keep/skip.")
+    # Do NOT echo the raw input — a user may have pasted a token at this prompt by mistake,
+    # and reflecting it would leak the secret into the terminal scrollback.
+    typer.echo("  Unrecognized choice, treating as skip.")
     typer.echo("")
     return (current_url, "keep") if current_url else (None, "skip"), None
 
@@ -930,74 +774,97 @@ def _wizard() -> None:  # noqa: C901 — sequential narrative reads better than 
     typer.echo(_AGENT_WARNING)
     typer.echo("")
 
-    if _is_fish():
-        _print_fish_abort()
-        raise typer.Exit(0)
-
     platform_name = _detect_platform()
     shell = _detect_shell()
     typer.echo(f"Detected platform: {platform_name} (shell: {shell})")
     typer.echo("")
 
-    # File/env mismatch banner — Unix only (Windows env is registry-backed, no source step).
-    if platform_name != "windows":
-        orphans = _orphan_token_files()
-        if orphans:
-            rc = _shell_rc_path()
-            try:
-                rc_disp = "~/" + str(rc.relative_to(Path.home()))
-            except ValueError:
-                rc_disp = str(rc)
-            files_csv = " ".join(f"~/.secrets/{p}_pat" for p in orphans)
-            typer.echo(
-                "ℹ Token file(s) exist on disk but the env var(s) aren't loaded in this shell:\n"
-                f"    {files_csv}\n"
-                f"  To use them now:        source {rc_disp}\n"
-                "  To overwrite them:      re-enter a PAT below (pick [e]dit)\n"
-                f"  To delete the file(s):  pick [r]emove below, or run: rm {files_csv}\n"
-            )
+    from atlassian_skills.core.config import get_env_token, get_profile, load_config
+
+    # Command-storage notice. The wizard only manages keyring; it cannot see or write a
+    # shell-command provider. Saving any PAT below flips the WHOLE profile to storage=keyring,
+    # which would silently break command-based resolution for the other products. Warn up front
+    # (non-silent) and point command users at the manual config path instead.
+    current_storage = get_profile(load_config(), "default").storage
+    if current_storage == "command":
+        typer.echo(
+            "⚠ This profile uses storage='command' (shell-command secret manager).\n"
+            "  The wizard manages the OS keyring only — it cannot edit your command setup. If you\n"
+            "  set a PAT below, the ENTIRE profile switches to storage='keyring', which will break\n"
+            "  command-based resolution for every product. To keep using commands, edit\n"
+            "  config.toml directly (README → Manual setup) and skip the PAT prompts here."
+        )
+        typer.echo("")
+
+    # Env-token detection. The resolver does env > keyring, so a live env token always shadows a
+    # keyring entry. Rather than write a shadowed (and therefore useless) keyring entry, the wizard
+    # tells the user and SKIPS those products. We never delete their env/rc — they do that.
+    env_products = [p for p in _PRODUCTS if get_env_token("default", p)]
+    if env_products:
+        typer.echo("ℹ atls is already reading token(s) from your environment:")
+        for p in env_products:
+            typer.echo(f"    {p.upper()}: {_env_token_var(p)}")
+        typer.echo(
+            "  Environment variables take priority over the keyring, so this wizard — which stores\n"
+            "  tokens in the OS keyring only — will SKIP those products (a keyring entry would just be\n"
+            "  shadowed). Your env setup keeps working untouched.\n"
+            "\n"
+            "  • To move a product to the keyring: unset its env var, remove it from your shell rc,\n"
+            "    open a NEW terminal, then re-run `atls setup`.\n"
+            "  • To keep using environment variables (or use a shell-command secret manager): see\n"
+            "    README → Manual setup. The wizard won't manage those."
+        )
+        typer.echo("")
 
     url_state = _existing_url_state()
-    token_state = _existing_tokens()
-    file_state = _existing_file_state()
 
     url_actions: dict[str, tuple[str | None, str]] = {}
-    new_tokens: dict[str, str] = {}
+    new_secrets: dict[str, str] = {}  # raw PATs to store in the keyring, keyed by product
     total_steps = len(_PRODUCTS) + 1  # +1 for AI agent step
 
     for idx, product in enumerate(_PRODUCTS, start=1):
-        (url, action), token = _wizard_product_step(product, idx, total_steps, url_state, token_state, file_state)
+        (url, action), secret = _wizard_product_step(product, idx, total_steps, url_state, env_products)
         url_actions[product] = (url, action)
-        if token is not None:
-            new_tokens[product] = token
+        if secret is not None:
+            new_secrets[product] = secret
 
     _apply_url_changes(url_actions)
 
-    # Save tokens — Unix rebuilds the rc block from ALL existing ~/.secrets files so a
-    # product that wasn't touched in this run keeps its export line (Bug 1 fix).
-    if new_tokens:
-        if platform_name == "windows":
-            env_vars = {_TOKEN_ENV_NAMES[p]: t for p, t in new_tokens.items()}
-            _save_tokens_windows(env_vars)
-            typer.echo("  → tokens saved to Windows user env (HKCU\\Environment)")
-        else:
-            for product, token in new_tokens.items():
-                _save_token_unix(product, token)
-            msg = _inject_shell_env_block_from_disk()
-            typer.echo(f"  {msg.strip()}")
+    if new_secrets:
+        # Surface the headless caveat BEFORE writing — these are exactly the sessions where the
+        # keyring write itself can fail, so the warning must not be gated behind a successful save.
+        headless_signals = _detect_headless()
+        if headless_signals:
+            typer.echo(
+                f"  ⚠ this session may not be able to unlock the OS keyring ({headless_signals[0]});\n"
+                "    if the write or later reads fail, use environment variables instead "
+                "(README → Manual setup).",
+                err=True,
+            )
+        try:
+            for product, token in new_secrets.items():
+                _save_token_keyring("default", product, token)
+        except ImportError:
+            typer.echo(f"  ✗ keyring not available — install it: {_keyring_install_hint()}", err=True)
+            raise typer.Exit(1) from None
+        except Exception as exc:  # noqa: BLE001 — keyring backend failure (NoKeyringError / locked / init)
+            # No usable/unlockable backend (headless Linux without D-Bus, locked Keychain, …).
+            # keyring raises keyring.errors.KeyringError here, NOT ImportError — catch it so the
+            # wizard exits cleanly instead of dumping a traceback at the user.
+            typer.echo(f"  ✗ couldn't write to the OS keyring: {exc}", err=True)
+            typer.echo(
+                "    This session likely can't unlock a keyring backend. Use environment variables\n"
+                "    instead (README → Manual setup), or run from an unlocked desktop session.",
+                err=True,
+            )
+            raise typer.Exit(1) from None
+        typer.echo(f"  → saved {len(new_secrets)} token(s) to the OS keyring (service 'atls-default')")
+        if platform_name == "macos":
+            typer.echo('    macOS: click "Always Allow" on first access so atls isn\'t re-prompted each call.')
+        # Persist storage=keyring now that a keyring token exists. A pure env user who ran the
+        # wizard for URLs/skills only (empty new_secrets) must NOT get storage flipped.
+        _set_profile_storage("keyring")
         typer.echo("")
-
-    # B1 warning — manual exports outside the atls block can shadow wizard-managed tokens
-    if platform_name != "windows":
-        for warning in _detect_rc_shadowing():
-            typer.echo(f"⚠ {warning}", err=True)
-
-    # ATLS_DEFAULT_*_TOKEN shadowing: the advanced-multi-profile env var takes priority
-    # over the legacy `JIRA_PERSONAL_TOKEN` etc., so saving a new token via the wizard
-    # has no effect until the ATLS_* form is unset.
-    if new_tokens:
-        for warning in _detect_atls_default_shadowing(list(new_tokens.keys())):
-            typer.echo(f"⚠ {warning}", err=True)
 
     # AI agent step — defaults to Yes for all three agents. `atls upgrade` (--skills-only)
     # still respects opt-in: it only refreshes Copilot when SKILL.md already exists, so
@@ -1017,14 +884,11 @@ def _wizard() -> None:  # noqa: C901 — sequential narrative reads better than 
         )
     typer.echo("")
 
-    # Final guidance — shell-agnostic. "Open a new terminal" is the universal answer:
-    # it works regardless of zsh/bash/cmd/PowerShell/Git Bash and skips the rc-file
-    # detection guessing game entirely.
+    # Final guidance — keyring-focused; tokens are read on each call, so no shell restart is needed.
     typer.echo("Next steps:")
-    typer.echo("  • Open a new terminal to use the new env vars (works on every shell + platform).")
-    if platform_name == "windows":
-        typer.echo("    No reboot needed — HKCU\\Environment is read by every new process.")
-    typer.echo("  • Already-running apps that read env at startup (IDEs, editors) need a restart.")
+    typer.echo("  • Tokens live in the OS keyring — no shell restart needed.")
+    if env_products:
+        typer.echo("  • Your environment-based tokens are unchanged and still take priority.")
     if install_claude or install_codex:
         typer.echo(
             "  • AI agent skills: Claude Code / Codex auto-load `atls` on the next session. "
@@ -1032,12 +896,14 @@ def _wizard() -> None:  # noqa: C901 — sequential narrative reads better than 
         )
     typer.echo("")
 
-    # Verify — os.environ has been updated in-process by _save_token_unix / _save_tokens_windows
+    # Verify — probe the configured provider so the user sees the credential actually resolves.
+    # resolve=True exercises the freshly-saved keyring entry (any unlock prompt is expected here —
+    # this is the verification step).
     typer.echo("Verifying...")
     typer.echo("")
     from atlassian_skills.cli.auth import render_auth_status
 
-    render_auth_status("default")
+    render_auth_status("default", resolve=True)
 
 
 # ---------------------------------------------------------------------------

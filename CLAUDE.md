@@ -6,7 +6,7 @@ A Python CLI + Claude Code Skill that lets LLM agents drive our internal Atlassi
 
 - **Binary**: `atls`
 - **Package**: `atlassian-skills`
-- **Current version**: 0.2.7 (interactive `atls setup` wizard, `atls doctor` diagnostic; legacy `setup all/codex/claude/paths/status` deprecated for removal in 0.3.0)
+- **Current version**: 0.2.8 (keyring + shell-command credential storage with per-product commands; keyring-only `atls setup` wizard; `atls auth status --resolve`; `atls doctor` PyPI freshness banner; legacy `setup all/codex/claude/paths/status` deprecated for removal in 0.3.0)
 
 ## Build & Run
 
@@ -124,7 +124,7 @@ export ATLS_CORP_CONFLUENCE_TOKEN="your-pat"
 jira_url = "https://jira.corp.example.com"
 
 # System keyring — uses platform native store (macOS Keychain, Windows Credential Manager, Linux Secret Service)
-# Requires the keyring extra (e.g. uv tool install --force "atlassian-skills[keyring]")
+# The keyring package is a base dependency (bundled by default — no extra needed)
 # Keyring entry: service="atls-<profile>", account="<product>_token"
 [profiles.corp]
 jira_url = "https://jira.corp.example.com"

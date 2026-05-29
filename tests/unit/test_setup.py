@@ -1,9 +1,10 @@
-"""Tests for cli/setup.py — wizard, shim, helpers, TTY/fish guards, no-token-echo."""
+"""Tests for cli/setup.py — keyring-only wizard, shim, helpers, TTY guard, no-token-echo."""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from typer.testing import CliRunner
@@ -367,7 +368,16 @@ class TestSkillsOnly:
 
 @pytest.fixture
 def wizard_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bypass_tty_guard: None) -> Path:
-    """Common wizard sandbox: tmp HOME, stub all install paths, neutralise Windows path."""
+    """Common wizard sandbox: tmp HOME, stub all install paths, neutralise Windows path.
+
+    The wizard is keyring-only, so this fixture injects a MagicMock `keyring` module (its
+    `get_password` returns a real string so the final `--resolve` verify works) and stubs
+    `_detect_headless`→[] so no token test ever touches the real OS keyring. Tests that need a
+    specific keyring behaviour can still install their own `patch.dict('sys.modules', ...)`.
+    """
+    import sys as _sys
+    from unittest.mock import MagicMock as _MagicMock
+
     import atlassian_skills.cli.setup as setup_mod
     import atlassian_skills.core.config as config_mod
 
@@ -379,8 +389,13 @@ def wizard_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bypass_tty_guard
     _stub_paths(monkeypatch, tmp_path, asset_root)
     # Always pretend we're on Linux for these tests (fish env neutralised)
     monkeypatch.setattr(setup_mod, "_detect_platform", lambda: "linux")
+    monkeypatch.setattr(setup_mod, "_detect_headless", lambda: [])
     monkeypatch.delenv("FISH_VERSION", raising=False)
     monkeypatch.setenv("SHELL", "/bin/zsh")
+    # Default keyring stub so URL+PAT tests don't reach the real OS keyring.
+    mock_keyring = _MagicMock()
+    mock_keyring.get_password.return_value = "resolved-token"
+    monkeypatch.setitem(_sys.modules, "keyring", mock_keyring)
     # Clear any leftover token env vars from the host
     for name in ("JIRA_PERSONAL_TOKEN", "CONFLUENCE_PERSONAL_TOKEN", "BITBUCKET_TOKEN"):
         monkeypatch.delenv(name, raising=False)
@@ -406,8 +421,9 @@ def _wizard_input(
 ) -> str:
     """Build wizard stdin.
 
-    Each product tuple is (action,) or (action, url, pat). The product-block walks
-    Jira → Confluence → Bitbucket, then the agent step asks claude/codex/copilot.
+    The wizard is keyring-only — there is no storage prompt. Each product tuple is (action,) or
+    (action, url, pat). The product-block walks Jira → Confluence → Bitbucket, then the agent step
+    asks claude/codex/copilot.
     """
     lines: list[str] = []
     for spec in (jira, conf, bb):
@@ -447,8 +463,8 @@ class TestWizardURLs:
         save_config(config)
 
         runner = CliRunner()
-        # default for each product (existing) is 'k'; for agent install all three default Y.
-        # Enter × 3 (jira/conf/bb) + 'n' × 3 to explicitly decline asset installs (no asset_root stubbed here)
+        # Default for each seeded product is 's' (skip = keep as-is); for agent install all three
+        # default Y. Enter × 3 (jira/conf/bb) + 'n' × 3 to explicitly decline asset installs.
         result = runner.invoke(app, ["setup"], input="\n\n\nn\nn\nn\n")
 
         assert result.exit_code == 0
@@ -496,74 +512,6 @@ class TestWizardURLs:
         assert "cannot permanently unset" in result.output
 
 
-class TestWizardTokens:
-    def test_unix_token_writes_secrets_and_updates_env(self, wizard_env: Path) -> None:
-        from atlassian_skills.cli.main import app
-
-        runner = CliRunner()
-        result = runner.invoke(
-            app,
-            ["setup"],
-            input=_wizard_input(jira=("a", "https://jira.example.com", "SECRET-JIRA-TOKEN-XYZ")),
-        )
-
-        assert result.exit_code == 0
-        secrets_file = wizard_env / ".secrets" / "jira_pat"
-        assert secrets_file.exists()
-        assert secrets_file.read_text(encoding="utf-8") == "SECRET-JIRA-TOKEN-XYZ"
-        assert secrets_file.stat().st_mode & 0o777 == 0o600
-
-        zshrc = wizard_env / ".zshrc"
-        rc = zshrc.read_text(encoding="utf-8")
-        assert ">>> atls env >>>" in rc
-        assert "JIRA_PERSONAL_TOKEN" in rc
-        assert os.environ.get("JIRA_PERSONAL_TOKEN") == "SECRET-JIRA-TOKEN-XYZ"
-
-    def test_shell_rc_idempotent_on_rerun(self, wizard_env: Path) -> None:
-        from atlassian_skills.cli.main import app
-
-        runner = CliRunner()
-        runner.invoke(
-            app,
-            ["setup"],
-            input=_wizard_input(jira=("a", "https://jira.example.com", "t1")),
-        )
-        zshrc = wizard_env / ".zshrc"
-        assert zshrc.read_text(encoding="utf-8").count(">>> atls env >>>") == 1
-
-        # Re-run: 'k' for jira (URL+PAT now set), skip conf/bb
-        runner.invoke(app, ["setup"], input=_wizard_input(jira=("k",)))
-        assert zshrc.read_text(encoding="utf-8").count(">>> atls env >>>") == 1
-
-
-class TestWizardWindows:
-    def test_windows_calls_save_tokens_with_env_vars(self, wizard_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        import atlassian_skills.cli.setup as setup_mod
-
-        captured: dict[str, str] = {}
-
-        def fake_save(env_vars: dict[str, str]) -> None:
-            captured.update(env_vars)
-            for k, v in env_vars.items():
-                os.environ[k] = v
-
-        monkeypatch.setattr(setup_mod, "_detect_platform", lambda: "windows")
-        monkeypatch.setattr(setup_mod, "_save_tokens_windows", fake_save)
-
-        from atlassian_skills.cli.main import app
-
-        runner = CliRunner()
-        result = runner.invoke(
-            app,
-            ["setup"],
-            input=_wizard_input(jira=("a", "https://jira.example.com", "win-jira-token")),
-        )
-
-        assert result.exit_code == 0
-        assert captured == {"JIRA_PERSONAL_TOKEN": "win-jira-token"}
-        assert os.environ.get("JIRA_PERSONAL_TOKEN") == "win-jira-token"
-
-
 class TestNoTokenEcho:
     def test_token_value_never_appears_in_output(self, wizard_env: Path) -> None:
         from atlassian_skills.cli.main import app
@@ -580,136 +528,45 @@ class TestNoTokenEcho:
         assert secret not in result.output
 
 
-class TestWizardBugFixes:
-    """Bug Bug 1: rebuilding the rc block must preserve unrelated existing exports.
-    (Bug 2 fix from earlier — file-fallback in `_existing_tokens` — was rolled back
-    because it broke the single-source-of-truth: env is the only ground truth; users
-    must `source ~/.zshrc`. See `TestOrphanTokenFiles` for the replacement behaviour.)
-    """
+class TestWizardRemove:
+    """`[r]emove` on a config-URL product clears the keyring entry + the config URL, and never
+    touches env vars or shell rc files (those are the user's manual setup)."""
 
-    def test_adding_bitbucket_preserves_existing_jira_export(self, wizard_env: Path) -> None:
-        """Bug 1: previously, saving a fresh Bitbucket token wiped the Jira export line
-        because `_inject_shell_env_block` rebuilt the block from the in-memory delta only.
-        Now the block is rebuilt from every existing `~/.secrets/*_pat` on disk.
-        """
+    def test_remove_clears_keyring_and_config_url_without_touching_rc(
+        self, wizard_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import atlassian_skills.cli.setup as setup_mod
         from atlassian_skills.cli.main import app
+        from atlassian_skills.core.config import Config, Profile, load_config, save_config
 
-        runner = CliRunner()
-        # 1) save jira
-        runner.invoke(
-            app,
-            ["setup"],
-            input=_wizard_input(jira=("a", "https://jira.example.com", "t-jira")),
-        )
-        # 2) keep jira, add bitbucket
-        runner.invoke(
-            app,
-            ["setup"],
-            input=_wizard_input(
-                jira=("k",),
-                bb=("a", "https://bb.example.com", "t-bb"),
-            ),
-        )
-
-        rc = (wizard_env / ".zshrc").read_text(encoding="utf-8")
-        # Both exports must live inside the atls block
-        assert "JIRA_PERSONAL_TOKEN" in rc
-        assert "BITBUCKET_TOKEN" in rc
-        # Only one block, not two
-        assert rc.count(">>> atls env >>>") == 1
-
-
-class TestWizardShadowingWarning:
-    def test_warns_when_manual_export_outside_atls_block(self, wizard_env: Path) -> None:
-        """B1 warning: a user-written `export JIRA_PERSONAL_TOKEN=…` outside the atls block
-        can shadow the wizard-managed value depending on line order. We warn at the end."""
-        from atlassian_skills.cli.main import app
-
-        zshrc = wizard_env / ".zshrc"
-        zshrc.write_text('export JIRA_PERSONAL_TOKEN="manually-pinned-token"\n', encoding="utf-8")
-
-        runner = CliRunner()
-        result = runner.invoke(
-            app,
-            ["setup"],
-            input=_wizard_input(jira=("a", "https://jira.example.com", "wizard-token")),
-        )
-
-        assert result.exit_code == 0
-        assert "outside the atls block" in result.output
-        assert "JIRA_PERSONAL_TOKEN" in result.output
-
-    def test_no_warning_when_no_manual_export(self, wizard_env: Path) -> None:
-        from atlassian_skills.cli.main import app
-
-        runner = CliRunner()
-        result = runner.invoke(
-            app,
-            ["setup"],
-            input=_wizard_input(jira=("a", "https://jira.example.com", "wizard-token")),
-        )
-
-        assert result.exit_code == 0
-        assert "outside the atls block" not in result.output
-
-
-class TestOrphanTokenFiles:
-    """env is the single source of truth. ~/.secrets/{p}_pat without a matching env var
-    surfaces as a banner — never as 'set' — and can be deleted with `r`.
-    """
-
-    def test_existing_tokens_returns_zero_when_env_unset_even_if_file_exists(self, wizard_env: Path) -> None:
-        from atlassian_skills.cli.setup import _existing_tokens
-
-        secrets = wizard_env / ".secrets"
-        secrets.mkdir(mode=0o700, exist_ok=True)
-        (secrets / "jira_pat").write_text("STALE-FILE-TOKEN", encoding="utf-8")
-
-        tokens = _existing_tokens()
-        # env-only: file presence must not bump the count.
-        assert tokens["jira"] == 0
-
-    def test_orphan_banner_emitted_when_file_present_env_unset(self, wizard_env: Path) -> None:
-        from atlassian_skills.cli.main import app
-
-        secrets = wizard_env / ".secrets"
-        secrets.mkdir(mode=0o700, exist_ok=True)
-        (secrets / "jira_pat").write_text("STALE-TOKEN", encoding="utf-8")
-
-        runner = CliRunner()
-        # Skip all products; default for unconfigured is 's'.
-        result = runner.invoke(app, ["setup"], input=_wizard_input())
-
-        assert result.exit_code == 0
-        assert "Token file(s) exist on disk" in result.output
-        assert "~/.secrets/jira_pat" in result.output
-        assert "source" in result.output
-
-    def test_remove_deletes_token_file(self, wizard_env: Path) -> None:
-        from atlassian_skills.cli.main import app
-        from atlassian_skills.core.config import Config, Profile, save_config
-
-        # Seed: jira URL in config + matching token file (orphan after env unset).
         config = Config()
         config.profiles["default"] = Profile(jira_url="https://jira.example.com")
         save_config(config)
-        secrets = wizard_env / ".secrets"
-        secrets.mkdir(mode=0o700, exist_ok=True)
-        (secrets / "jira_pat").write_text("DOOMED-TOKEN", encoding="utf-8")
+        # A pre-existing shell rc must be left untouched (the wizard no longer writes rc).
+        zshrc = wizard_env / ".zshrc"
+        zshrc.write_text("export JIRA_PERSONAL_TOKEN='left-alone'\n", encoding="utf-8")
+
+        delete_calls: list[tuple[str, str]] = []
+
+        def _fake_delete(profile: str, product: str) -> bool:
+            # Simulate an entry that existed and was deleted — the helper now returns True on
+            # success so the wizard only prints "cleared …" when something was actually removed.
+            delete_calls.append((profile, product))
+            return True
+
+        monkeypatch.setattr(setup_mod, "_delete_token_keyring", _fake_delete)
 
         runner = CliRunner()
         result = runner.invoke(app, ["setup"], input=_wizard_input(jira=("r",)))
 
-        assert result.exit_code == 0
-        # File deleted
-        assert not (secrets / "jira_pat").exists()
-        # And URL removed from config.toml
-        from atlassian_skills.core.config import load_config
-
+        assert result.exit_code == 0, result.output
+        assert ("default", "jira") in delete_calls
+        assert "cleared Jira keyring entry" in result.output
+        # config URL removed; shell rc untouched.
         prof = load_config().profiles.get("default")
         if prof is not None:
             assert prof.jira_url is None
-        assert "Deleted token file" in result.output
+        assert zshrc.read_text(encoding="utf-8") == "export JIRA_PERSONAL_TOKEN='left-alone'\n"
 
 
 class TestWizardPATIssuerHint:
@@ -741,7 +598,7 @@ class TestWizardPATIssuerHint:
 
 
 # ---------------------------------------------------------------------------
-# Guards: TTY + fish
+# Guards: TTY (the wizard no longer aborts on fish — it doesn't write shell rc)
 # ---------------------------------------------------------------------------
 
 
@@ -787,27 +644,28 @@ class TestTTYGuard:
         from atlassian_skills.cli.main import app
 
         runner = CliRunner()
+        # skip × 3 (jira/conf/bb) + n × 3 (decline agent installs).
         result = runner.invoke(app, ["setup"], input="s\ns\ns\nn\nn\nn\n")
 
         assert result.exit_code == 0
         assert "interactive terminal" not in result.output
 
 
-class TestFishGuard:
-    def test_fish_aborts_before_any_prompt(self, wizard_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+class TestFishNoLongerAborts:
+    def test_fish_runs_normally(self, wizard_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The wizard no longer writes shell rc, so fish is fine — it must NOT abort and must
+        reach the product prompts."""
         monkeypatch.setenv("FISH_VERSION", "3.7.0")
 
         from atlassian_skills.cli.main import app
 
         runner = CliRunner()
-        # Even with garbage input, the guard should fire before any prompt reads it
-        result = runner.invoke(app, ["setup"], input="should-not-be-read\n")
+        result = runner.invoke(app, ["setup"], input=_wizard_input())
 
         assert result.exit_code == 0
-        assert "fish shell detected" in result.output
-        # No prompt output — wizard didn't reach URL stage
-        assert "[1/4]" not in result.output
-        assert "[1/4]" not in result.output
+        assert "fish shell detected" not in result.output
+        # The wizard reached the first product prompt.
+        assert "[1/4]" in result.output
 
 
 class TestCopilotInstall:
@@ -908,3 +766,298 @@ class TestDoctorShowsCopilot:
         # When not installed, doctor must still show the status line
         assert "Copilot skill" in result.output
         assert "not installed" in result.output
+
+
+# ---------------------------------------------------------------------------
+# 0.2.8 — keyring-only wizard: keyring save, env-token skip, no-flip, missing dep
+# ---------------------------------------------------------------------------
+
+
+def _write_config(tmp_path: Path, **profile_kwargs: object) -> None:
+    """Write a config.toml with a single [profiles.default] for resolve tests."""
+    from atlassian_skills.core.config import Config, Profile, save_config
+
+    config = Config(profiles={"default": Profile(**profile_kwargs)})  # type: ignore[arg-type]
+    save_config(config, tmp_path / "config.toml")
+
+
+class TestWizardKeyring:
+    """Keyring-only wizard: keyring save, env-token skip, no-flip, missing dep, headless caveat."""
+
+    def test_keyring_set_password_args_match_reader(self, wizard_env: Path) -> None:
+        """REGRESSION GUARD: the wizard must store under the exact key core.auth reads —
+        keyring.set_password('atls-default', '<product>_token', token). If this drifts, the
+        wizard saves a token the resolver can never find. Also persists storage='keyring'.
+        """
+        import sys
+
+        from atlassian_skills.cli.main import app
+        from atlassian_skills.core.config import load_config
+
+        mock_keyring = MagicMock()
+        mock_keyring.get_password.return_value = "jira-pat-xyz"  # for the final --resolve verify
+
+        runner = CliRunner()
+        with patch.dict(sys.modules, {"keyring": mock_keyring}):
+            result = runner.invoke(
+                app,
+                ["setup"],
+                input=_wizard_input(jira=("e", "https://jira.example.com", "jira-pat-xyz")),
+            )
+
+        assert result.exit_code == 0, result.output
+        mock_keyring.set_password.assert_any_call("atls-default", "jira_token", "jira-pat-xyz")
+        assert load_config().profiles["default"].storage == "keyring"
+
+    def test_env_token_product_is_skipped_not_shadowed(self, wizard_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A product whose token is in the environment must NOT get a (shadowed) keyring entry —
+        the wizard says the token stays in the environment and never calls set_password for it.
+        The env-detection banner is shown up-front."""
+        import sys
+
+        from atlassian_skills.cli.main import app
+
+        monkeypatch.setenv("ATLS_DEFAULT_JIRA_TOKEN", "x" * 44)
+
+        mock_keyring = MagicMock()
+        mock_keyring.get_password.return_value = "tok"
+        runner = CliRunner()
+        # jira: edit (url, no PAT prompt — token stays in env); conf/bb skip; decline agents.
+        with patch.dict(sys.modules, {"keyring": mock_keyring}):
+            result = runner.invoke(app, ["setup"], input=_wizard_input(jira=("e", "https://jira.example.com")))
+
+        assert result.exit_code == 0, result.output
+        # Env-detection banner appears, naming the variable.
+        assert "already reading token(s) from your environment" in result.output
+        assert "ATLS_DEFAULT_JIRA_TOKEN" in result.output
+        # The wizard tells the user the token stays in the environment...
+        assert "token stays in the environment" in result.output
+        # ...and never writes a (shadowed) keyring entry for jira.
+        for call in mock_keyring.set_password.call_args_list:
+            assert call.args[1] != "jira_token", "wizard must not write a keyring entry for an env product"
+
+    def test_pure_env_user_skip_through_does_not_flip_storage(
+        self, wizard_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A pure env user (env token set) who skips everything must NOT get storage flipped to
+        keyring — no keyring token was written, so storage stays as-is."""
+        import sys
+
+        from atlassian_skills.cli.main import app
+        from atlassian_skills.core.config import load_config
+
+        monkeypatch.setenv("ATLS_DEFAULT_JIRA_TOKEN", "x" * 44)
+
+        mock_keyring = MagicMock()
+        runner = CliRunner()
+        # Skip all products (jira default is 'e' but we pass 's'); decline agents.
+        with patch.dict(sys.modules, {"keyring": mock_keyring}):
+            result = runner.invoke(app, ["setup"], input=_wizard_input(jira=("s",)))
+
+        assert result.exit_code == 0, result.output
+        prof = load_config().profiles.get("default")
+        assert prof is None or prof.storage != "keyring"
+        mock_keyring.set_password.assert_not_called()
+
+    def test_keyring_missing_dep_aborts_with_installer_hint(self, wizard_env: Path) -> None:
+        """Entering a keyring token when the keyring package is unavailable aborts with exit 1 and
+        an install hint mentioning the extra."""
+        import sys
+
+        from atlassian_skills.cli.main import app
+
+        runner = CliRunner()
+        # Enter a real PAT for jira (no env), but keyring import fails on save → abort.
+        with patch.dict(sys.modules, {"keyring": None}):
+            result = runner.invoke(
+                app,
+                ["setup"],
+                input=_wizard_input(jira=("e", "https://jira.example.com", "jira-pat")),
+            )
+
+        assert result.exit_code == 1, result.output
+        assert "atlassian-skills[keyring]" in result.output
+
+    def test_keyring_backend_failure_aborts_cleanly_not_traceback(self, wizard_env: Path) -> None:
+        """REGRESSION: on a headless/locked store, keyring.set_password raises
+        keyring.errors.KeyringError (NOT ImportError). The wizard must catch it and exit 1 with a
+        friendly message — never dump a raw traceback at the user."""
+        import sys
+
+        from atlassian_skills.cli.main import app
+
+        class _NoKeyringError(RuntimeError):
+            """Stands in for keyring.errors.NoKeyringError."""
+
+        mock_keyring = MagicMock()
+        mock_keyring.set_password.side_effect = _NoKeyringError("No recommended backend was available")
+
+        runner = CliRunner()
+        with patch.dict(sys.modules, {"keyring": mock_keyring}):
+            result = runner.invoke(
+                app,
+                ["setup"],
+                input=_wizard_input(jira=("e", "https://jira.example.com", "jira-pat")),
+            )
+
+        assert result.exit_code == 1, result.output
+        assert "couldn't write to the OS keyring" in result.output
+        # The friendly message points at env vars; no raw exception class leaked as a crash.
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+
+    def test_command_storage_user_is_warned_before_flip(self, wizard_env: Path) -> None:
+        """A profile on storage='command' must be warned up front that setting a PAT switches the
+        WHOLE profile to keyring (silently breaking command resolution) — never flip silently."""
+        _write_config(
+            wizard_env,
+            storage="command",
+            credential_command="op read op://vault/atlassian/token",
+            jira_url="https://jira.example.com",
+        )
+
+        from atlassian_skills.cli.main import app
+
+        runner = CliRunner()
+        # Skip every product, decline agents — no PAT entered, so nothing is flipped.
+        result = runner.invoke(app, ["setup"], input=_wizard_input(jira=("s",)))
+
+        assert result.exit_code == 0, result.output
+        assert "storage='command'" in result.output
+        assert "ENTIRE profile switches to storage='keyring'" in result.output.replace("\n", " ")
+
+    def test_headless_caveat_warns_after_saving(self, wizard_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When headless signals are present and a token was saved, the wizard prints a one-line
+        caveat that the keyring may be locked in this session."""
+        import sys
+
+        import atlassian_skills.cli.setup as setup_mod
+        from atlassian_skills.cli.main import app
+
+        monkeypatch.setattr(setup_mod, "_detect_headless", lambda: ["running inside Docker (/.dockerenv present)"])
+        mock_keyring = MagicMock()
+        mock_keyring.get_password.return_value = "jira-pat"
+        runner = CliRunner()
+        with patch.dict(sys.modules, {"keyring": mock_keyring}):
+            result = runner.invoke(
+                app,
+                ["setup"],
+                input=_wizard_input(jira=("e", "https://jira.example.com", "jira-pat")),
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "may not be able to unlock" in result.output
+
+
+class TestAuthStatusResolve:
+    """`render_auth_status` must not probe providers unless resolve=True."""
+
+    def test_resolve_false_does_not_touch_keyring(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import atlassian_skills.core.config as config_mod
+        from atlassian_skills.cli.auth import render_auth_status
+
+        monkeypatch.setattr(config_mod, "config_path", lambda: tmp_path / "config.toml")
+        for v in ("ATLS_DEFAULT_JIRA_TOKEN", "JIRA_PERSONAL_TOKEN"):
+            monkeypatch.delenv(v, raising=False)
+        _write_config(tmp_path, storage="keyring", jira_url="https://jira.example.com")
+
+        mock_keyring = MagicMock()
+        with patch.dict("sys.modules", {"keyring": mock_keyring}):
+            render_auth_status("default", resolve=False)
+
+        mock_keyring.get_password.assert_not_called()
+
+    def test_resolve_true_probes_keyring(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import atlassian_skills.core.config as config_mod
+        from atlassian_skills.cli.auth import render_auth_status
+
+        monkeypatch.setattr(config_mod, "config_path", lambda: tmp_path / "config.toml")
+        for v in ("ATLS_DEFAULT_JIRA_TOKEN", "JIRA_PERSONAL_TOKEN"):
+            monkeypatch.delenv(v, raising=False)
+        _write_config(tmp_path, storage="keyring", jira_url="https://jira.example.com")
+
+        mock_keyring = MagicMock()
+        mock_keyring.get_password.return_value = "resolved-tok"
+        with patch.dict("sys.modules", {"keyring": mock_keyring}):
+            render_auth_status("default", resolve=True)
+
+        mock_keyring.get_password.assert_any_call("atls-default", "jira_token")
+
+    def test_resolve_false_does_not_run_command(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import atlassian_skills.core.config as config_mod
+        from atlassian_skills.cli.auth import render_auth_status
+
+        monkeypatch.setattr(config_mod, "config_path", lambda: tmp_path / "config.toml")
+        for v in ("ATLS_DEFAULT_JIRA_TOKEN", "JIRA_PERSONAL_TOKEN"):
+            monkeypatch.delenv(v, raising=False)
+        _write_config(tmp_path, storage="command", jira_command="echo should-not-run")
+
+        with patch("atlassian_skills.core.auth.subprocess.run") as mock_run:
+            render_auth_status("default", resolve=False)
+
+        mock_run.assert_not_called()
+
+    def test_env_shadowing_configured_keyring_is_warned(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """storage=keyring but a live env var resolves first → explicit shadow warning."""
+        import atlassian_skills.core.config as config_mod
+        from atlassian_skills.cli.auth import render_auth_status
+
+        monkeypatch.setattr(config_mod, "config_path", lambda: tmp_path / "config.toml")
+        monkeypatch.setenv("ATLS_DEFAULT_JIRA_TOKEN", "shadowing-env-token")
+        _write_config(tmp_path, storage="keyring", jira_url="https://jira.example.com")
+
+        render_auth_status("default", resolve=False)
+
+        out = capsys.readouterr().out
+        assert "source=env" in out
+        assert "shadowing it" in out
+        assert "storage=keyring" in out
+        assert "ATLS_DEFAULT_JIRA_TOKEN" in out
+
+    def test_env_source_no_warning_when_storage_is_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """With storage=env, source=env is expected — no shadow warning should appear."""
+        import atlassian_skills.core.config as config_mod
+        from atlassian_skills.cli.auth import render_auth_status
+
+        monkeypatch.setattr(config_mod, "config_path", lambda: tmp_path / "config.toml")
+        monkeypatch.setenv("ATLS_DEFAULT_JIRA_TOKEN", "env-token")
+        _write_config(tmp_path, storage="env", jira_url="https://jira.example.com")
+
+        render_auth_status("default", resolve=False)
+
+        out = capsys.readouterr().out
+        assert "source=env" in out
+        assert "shadowing" not in out
+
+
+class TestWizardMenuDefault:
+    """Per-product menu default: `e` when the config is incomplete (token but no URL), else `k`."""
+
+    def test_incomplete_product_defaults_to_edit(self, wizard_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from atlassian_skills.cli.main import app
+
+        # Token present (via env) but no URL configured → incomplete → menu should default to `e`.
+        monkeypatch.setenv("ATLS_DEFAULT_JIRA_TOKEN", "x" * 44)
+        runner = CliRunner()
+        result = runner.invoke(app, ["setup"], input=_wizard_input(jira=("s",)))
+
+        assert result.exit_code == 0, result.output
+        # The Jira block prints its menu with default=e.
+        assert "[s]kip / [e]dit / [r]emove [default=e]" in result.output
+
+    def test_complete_product_defaults_to_skip(self, wizard_env: Path) -> None:
+        from atlassian_skills.cli.main import app
+        from atlassian_skills.core.config import Config, Profile, save_config
+
+        # URL configured → product is usable → menu should default to `s` (skip = keep as-is).
+        save_config(
+            Config(profiles={"default": Profile(jira_url="https://jira.example.com")}), wizard_env / "config.toml"
+        )
+        runner = CliRunner()
+        result = runner.invoke(app, ["setup"], input=_wizard_input(jira=("s",)))
+
+        assert result.exit_code == 0, result.output
+        assert "[s]kip / [e]dit / [r]emove [default=s]" in result.output

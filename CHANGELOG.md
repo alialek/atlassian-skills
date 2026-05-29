@@ -20,6 +20,47 @@ use the same commands — on Windows they run identically in PowerShell, cmd, or
 
 ---
 
+## [0.2.8] - 2026-05-29
+
+### Added
+- **System keyring + shell-command credential storage** (closes #9). A profile's `storage`
+  setting now functions beyond env vars:
+  - `storage = "keyring"` reads tokens from the OS keyring (macOS Keychain, Windows
+    Credential Manager, Linux Secret Service) under service `atls-<profile>`, account
+    `<product>_token`. The `keyring` package is now a base dependency (bundled by default).
+  - `storage = "command"` runs a shell command that prints the token to stdout
+    (1Password `op`, `pass`, Bitwarden `bw`, PowerShell, …), with a 5-second timeout.
+- **Per-product credential commands** — `jira_command` / `confluence_command` /
+  `bitbucket_command` override a shared `credential_command`, so one profile can pull each
+  product's token from a different vault entry.
+- **`atls setup` is now keyring-only.** The wizard stores tokens in the OS keyring and nothing
+  else — it no longer writes shell rc files, env vars, `~/.secrets`, or `command` config. env
+  vars and `command` remain fully supported at runtime (resolver order is unchanged) but are
+  configured by hand (see README → Manual setup). Because env outranks the keyring, the wizard
+  **detects env-based tokens and skips those products** (a keyring entry would just be shadowed),
+  telling you to unset the env var + open a new terminal to switch. It never deletes your env
+  vars or shell rc. `storage` flips to keyring only when a token is actually stored, so an
+  env-based setup that Enter-throughs the wizard is left untouched.
+- **`atls doctor` shows a PyPI freshness banner at the top** — `✓ atls X (up to date)` or
+  `⚠ Update available: atls X → Y. Run 'atls upgrade'.` The check is best-effort with a short
+  timeout and degrades to a neutral line offline; `--no-update-check` skips the network call.
+  (Reuses the same PyPI lookup as `atls version --check`.)
+- **`atls auth status --resolve`** and **`atls doctor --resolve-credentials`** — actually
+  probe the configured provider (may prompt for Touch ID / a passphrase, or run the shell
+  command). Without the flag, both report the configured source only and never touch the
+  provider — safe to run repeatedly.
+- **Env-shadow warning** — when `storage` is `keyring`/`command` but a live env var resolves
+  first (so the configured provider is silently never used), `auth status` / `doctor` now flag
+  it explicitly and name the variable to unset.
+
+### Notes
+- Priority is **CLI flag > env var > the profile's configured provider**. `storage` selects a
+  single provider, not a fallback chain — an env var always wins at resolution time.
+- `keyring` is now bundled by default (promoted from optional extra). The `[keyring]` extra is
+  retained as a no-op alias so the pre-0.2.8 `pip install "atlassian-skills[keyring]"` keeps working.
+
+Co-authored-by: Doyle <873891+chrisdoyle@users.noreply.github.com>
+
 ## [0.2.7] - 2026-05-28
 
 > ⚠️ **Heads-up for 0.3.0**: `atls setup all/codex/claude/paths/status` still work in

@@ -1,6 +1,6 @@
 [project]
 name = "atlassian-skills"
-version = "0.2.7"
+version = "0.2.8"
 description = "Token-efficient CLI + Claude Code Skill for Atlassian Server/DC (Jira, Confluence, Bitbucket, Bamboo)."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -39,9 +39,12 @@ dependencies = [
     "tomli-w",
     "cfxmark>=0.4",
     "platformdirs",
+    "keyring>=24",
 ]
 
 [project.optional-dependencies]
+# Retained as a no-op alias so `pip install "atlassian-skills[keyring]"` (the pre-0.2.8
+# instruction) keeps working — keyring is now a base dependency.
 keyring = ["keyring>=24"]
 
 [dependency-groups]
