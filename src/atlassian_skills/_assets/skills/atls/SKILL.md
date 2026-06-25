@@ -4,15 +4,14 @@ description: |
   ALL Atlassian work — Jira, Confluence, Bitbucket, Zephyr on Server/DC
   (지라/컨플루언스/비트버킷/지파이어). Load BEFORE the first atls command.
 
-  Without this body, you WILL guess atls conventions wrong: JQL/CQL is
-  positional (not --jql), --format=json (not -f json — `-f` is
-  --md-file), push-md vs page update, exit 5 = stale-version.
+  Without this body, you WILL guess atls conventions wrong:
+  JQL/CQL is positional, use --format=json not -f json, exit 5=stale.
 
   TRIGGER: Jira, Confluence, Bitbucket, Zephyr, atls, JQL, CQL, PROJ-123,
   지라, 컨플루언스, 비트버킷, 아틀라시안.
 ---
 
-# atls — Atlassian CLI Dispatcher
+# atls
 
 <!-- installed-by: atls 0.2.8 -->
 
@@ -23,7 +22,7 @@ On missing command/flag or CHANGELOG-fixed behavior, run `atls version --check`;
 ```
 atls
 ├── jira
-│   ├── issue        get, search, create, update, delete, transition, transitions, dates, sla, images
+│   ├── issue        get, search, create, update, delete, transition(s), dates, sla, images
 │   ├── issue-batch  create
 │   ├── epic         link
 │   ├── comment      list, add, edit, delete
@@ -48,52 +47,44 @@ atls
 ├── bitbucket
 │   ├── project      list
 │   ├── repo         list, get
-│   ├── pr           list, get, diff, comments, commits, activity, create, update, merge, decline, approve, unapprove, needs-work, reopen, diffstat, statuses, pending-review
+│   ├── pr           list, get, diff, comments, commits, activity, create, update, merge, approve, statuses
 │   ├── branch       list
 │   ├── file         get
 │   ├── comment      add, reply, update, delete, resolve, reopen
 │   └── task         list, get, create, update, delete
 └── zephyr
-    ├── testcase     get, list, create, update, delete
-    ├── testresult   get, list, create
-    ├── testplan     get, list, create, add-testcases
-    ├── testrun      get, list, create
-    ├── folder       list, create
+    ├── testcase     get, search, create, update, delete, latest-result, steps, add-step, add-steps
+    ├── testresult   create
+    ├── testplan     get, search, create
+    ├── testrun      get, search, create, results, create-result, update-result, bulk-results
     ├── environment  list, create
     └── issuelink    testcases
 ```
 
-## Format selection
-1. List/scan many items? → `--format=compact` (default, fewest tokens)
-2. Parse fields programmatically? → `--format=json`
-3. Read body as readable text? → `--format=md`
-4. Preserve byte-exact server response? → `--format=raw`
+## Format
+compact=default scan, json=parse, md=read text, raw=byte-exact.
 
 ## Format placement
-- **Never use `-f` as a short form for `--format`** — several commands use `-f` for file input (`page create`, `page update`, `push-md`, `confluence comment add/reply`), so `-f json` may be silently interpreted as a filename.
-- Always use the long form `--format=...` after the subcommand.
+- Use `--format=...`; never `-f json` (`-f` may mean file input).
 
 ## page update vs push-md
-- `page update`: Low-level. Replace page body directly (`--body-format=storage|md`). No attachment handling.
-- `push-md`: High-level. Markdown-native with attachment syncing, passthrough comments, asset-dir, no-change detection. **Prefer this for markdown workflows.**
+`page update`=low-level body replace. `push-md`=markdown-native with attachments; prefer for md workflows.
 
 ## Common patterns
 ```bash
 # Jira
-atls jira issue get KEY                    # compact view
-atls jira issue search "project=PROJ"      # JQL search
+atls jira issue get KEY
+atls jira issue search "project=PROJ"
 atls jira issue create --project PROJ --type Story --summary "..." --body-file=-
 atls jira issue update KEY --body-file=- --body-format=md --heading-promotion=jira
-atls jira comment add KEY --body-file=- --body-format=md    # md → Jira wiki (also: comment edit, worklog add --comment-format=md)
+atls jira comment add KEY --body-file=- --body-format=md
 
-# Jira transition (2-step: discover ID, then transition)
-atls jira issue transitions KEY --format=json   # → [{"id":"31","name":"In Progress"},...]
+atls jira issue transitions KEY --format=json
 atls jira issue transition KEY --transition-id 31
-# Or by name (case-insensitive):
 atls jira issue transition KEY --transition-name "In Progress"
 
 # Confluence
-atls confluence page get ID                # compact view
+atls confluence page get ID
 atls confluence page search "CQL query"
 atls confluence page push-md ID --md-file page.md --if-version 15
 atls confluence page push-md ID --md-file page.md --asset-dir=assets/
@@ -102,13 +93,13 @@ atls confluence page diff-local ID page.md --passthrough-prefix workflow:
 
 # Zephyr Scale
 atls zephyr testcase get KEY
-atls zephyr testcase list --project-key PROJ --limit=20
+atls zephyr testcase search --query 'projectKey = "PROJ"' --max-results=20
 atls zephyr testresult create --data-json '{"testCaseKey":"PROJ-T1","status":"Pass"}' --dry-run
 ```
 
 ## Write safety
 - Always use `--dry-run` before write operations
-- Use `--if-version N` for Confluence updates & push-md (reject if stale → exit 5)
+- Use `--if-version N` for Confluence updates & push-md
 - Use `--if-updated ISO` for Jira updates (stale check → exit 5)
 - Use `--attachment-if-exists skip|replace` to control duplicate attachments (push-md)
 
@@ -116,13 +107,13 @@ atls zephyr testresult create --data-json '{"testCaseKey":"PROJ-T1","status":"Pa
 | Flag | Commands | Effect |
 |---|---|---|
 | `--if-version N` | push-md, page update | Optimistic lock (exit 5 if stale) |
-| `--asset-dir DIR` | push-md, pull-md | Batch attach / download assets (missing dir on push-md = empty set) |
+| `--asset-dir DIR` | push-md, pull-md | Batch attach / download assets |
 | `--output -o PATH` | pull-md | Write markdown to file instead of stdout |
 | `--resolve-assets=sidecar` | pull-md | Download attachments, rewrite image links |
 | `--passthrough-prefix P` | push-md, pull-md, diff-local, issue update | Preserve `<!-- P:... -->` comments |
 | `--md-file -` | push-md | Read markdown from stdin |
 | `--body-repr md\|raw\|wiki` | issue get | Control body representation (separate from `--format`) |
-| `--body-format md` / `--comment-format md` | jira issue/comment/worklog, confluence page/comment writes | md → server format (Jira wiki / Confluence storage) |
+| `--body-format md` / `--comment-format md` | jira/confluence writes | md → server format |
 | `--heading-promotion jira` | issue update, issue get, issue search | Heading level adjust for md↔wiki |
 | `--section "H2 Title"` | issue get, issue search | Extract specific H2 section from body |
 

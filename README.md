@@ -37,7 +37,7 @@ First-class integration with **Claude Code**, **Codex**, and **GitHub Copilot**.
 | Server/DC support | Partial | Full (primary target) |
 | AI agent setup | Manual MCP config | One interactive wizard (`atls setup`) for Claude Code + Codex + GitHub Copilot |
 | Bitbucket Server | Not supported | Full (0.2.0) — PR workflow, comments, tasks, build status |
-| Zephyr Scale | Not supported | Server/DC test cases, runs, plans, folders, environments |
+| Zephyr Scale | Not supported | Server/DC test cases, runs, plans, environments |
 | Bamboo | Not supported | Planned (0.3.0) |
 
 ## Quick install
@@ -267,7 +267,7 @@ atls confluence page pull-md 12345 --output=page.md --resolve-assets=sidecar --a
 
 # Zephyr Scale
 atls zephyr testcase get PROJ-T1
-atls zephyr testcase list --project-key PROJ --limit=20
+atls zephyr testcase search --query 'projectKey = "PROJ"' --max-results=20
 atls zephyr testresult create --data-json '{"testCaseKey":"PROJ-T1","status":"Pass"}' --dry-run
 
 # Jira description from markdown
@@ -376,11 +376,10 @@ atls jira issue get PROJ-1 --format=json
 > All write commands support `--dry-run`. PR diff and file get treat `--format=md` as raw text passthrough.
 
 ### Zephyr Scale
-- `zephyr testcase get|list|create|update|delete`
-- `zephyr testresult get|list|create`
-- `zephyr testplan get|list|create|add-testcases`
-- `zephyr testrun get|list|create`
-- `zephyr folder list|create`
+- `zephyr testcase get|search|create|update|delete|latest-result|steps|add-step|add-steps`
+- `zephyr testresult create`
+- `zephyr testplan get|search|create`
+- `zephyr testrun get|search|create|results|create-result|update-result|bulk-results`
 - `zephyr environment list|create`
 - `zephyr issuelink testcases`
 
