@@ -27,7 +27,7 @@ _ATLS_COPILOT_BLOCK_END = "<!-- ATLS-COPILOT:END -->"
 # two ends (wizard writes / auth reads) in lockstep.
 from atlassian_skills.core.config import _LEGACY_TOKEN_VARS as _TOKEN_ENV_NAMES  # noqa: E402, PLC0415
 
-_PRODUCTS = ("jira", "confluence", "bitbucket")
+_PRODUCTS = ("jira", "confluence", "bitbucket", "zephyr")
 
 _AGENT_WARNING = "⚠ Run this directly in a real terminal — never through an AI agent."
 
@@ -52,7 +52,7 @@ def _claude_md_block() -> str:
     return f"""{_ATLS_CLAUDE_BLOCK_START}
 <!-- ATLS:VERSION:{ver} -->
 ## Atlassian (atls)
-- Atlassian work (Jira/Confluence/Bitbucket/지라/컨플루언스/비트버킷) → load the `atls` skill BEFORE the first atls command.
+- Atlassian work (Jira/Confluence/Bitbucket/Zephyr/지라/컨플루언스/비트버킷/지파이어) → load the `atls` skill BEFORE the first atls command.
 - This file only routes. Do NOT infer atls flags or syntax from here — the skill is the single source of truth.
 {_ATLS_CLAUDE_BLOCK_END}"""
 
@@ -63,7 +63,7 @@ def _codex_agents_block() -> str:
     return f"""{_ATLS_CODEX_BLOCK_START}
 <!-- ATLS:VERSION:{ver} -->
 ## Atlassian via atls
-- Atlassian work (Jira/Confluence/Bitbucket/지라/컨플루언스/비트버킷) → load the `$atls` skill BEFORE the first atls command.
+- Atlassian work (Jira/Confluence/Bitbucket/Zephyr/지라/컨플루언스/비트버킷/지파이어) → load the `$atls` skill BEFORE the first atls command.
 - This file only routes. Do NOT infer atls flags or syntax from here — the skill is the single source of truth.
 {_ATLS_CODEX_BLOCK_END}"""
 
@@ -79,7 +79,7 @@ def _copilot_instructions_block() -> str:
     return f"""{_ATLS_COPILOT_BLOCK_START}
 <!-- ATLS:VERSION:{ver} -->
 ## Atlassian via atls
-- Atlassian work (Jira/Confluence/Bitbucket/지라/컨플루언스/비트버킷) → read the `atls` skill at `~/.copilot/skills/atls/SKILL.md` BEFORE the first atls command.
+- Atlassian work (Jira/Confluence/Bitbucket/Zephyr/지라/컨플루언스/비트버킷/지파이어) → read the `atls` skill at `~/.copilot/skills/atls/SKILL.md` BEFORE the first atls command.
 - This file only routes. Do NOT infer atls flags or syntax from here — the skill is the single source of truth.
 {_ATLS_COPILOT_BLOCK_END}"""
 
@@ -511,6 +511,7 @@ def _existing_url_state(profile_name: str = "default") -> dict[str, tuple[str | 
         "jira": prof.jira_url,
         "confluence": prof.confluence_url,
         "bitbucket": prof.bitbucket_url,
+        "zephyr": prof.zephyr_url,
     }
     return {p: _resolve_url(profile_name, p, url_fields[p]) for p in _PRODUCTS}
 
@@ -541,6 +542,8 @@ def _pat_issuer_hint(product: str) -> str:
     """
     if product == "bitbucket":
         return "In Bitbucket: Profile → Manage Account → HTTP access tokens → Create"
+    if product == "zephyr":
+        return "Use the Jira/Zephyr Server/DC token accepted by your Zephyr REST API"
     return f"In {product.capitalize()}: Profile (top-right avatar) → Personal Access Tokens → Create"
 
 
@@ -656,7 +659,7 @@ def _wizard_product_step(  # noqa: C901 — sequential prompt narrative reads be
     url_state: dict[str, tuple[str | None, str | None]],
     env_products: list[str],
 ) -> tuple[tuple[str | None, str], str | None]:
-    """Walk one product (Jira/Confluence/Bitbucket) through its URL + secret prompts.
+    """Walk one product (Jira/Confluence/Bitbucket/Zephyr) through its URL + secret prompts.
 
     Returns ((url, url_action), new_secret_or_None). `url_action` ∈ {'set', 'keep', 'skip',
     'clear-config', 'clear-env-noop'}. The second element is the freshly-entered raw PAT to
@@ -938,7 +941,7 @@ def setup_entry(
     skills_only: bool = typer.Option(
         False,
         "--skills-only",
-        help="Silently reinstall Claude/Codex skill assets (used by `atls upgrade`).",
+        help="Silently reinstall AI agent skill assets (used by `atls upgrade`).",
     ),
 ) -> None:
     """Run the interactive setup wizard. With --skills-only, refresh skill assets silently."""

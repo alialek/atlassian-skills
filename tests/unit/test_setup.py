@@ -406,9 +406,11 @@ def wizard_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bypass_tty_guard
         "ATLS_DEFAULT_JIRA_URL",
         "ATLS_DEFAULT_CONFLUENCE_URL",
         "ATLS_DEFAULT_BITBUCKET_URL",
+        "ATLS_DEFAULT_ZEPHYR_URL",
         "ATLS_DEFAULT_JIRA_TOKEN",
         "ATLS_DEFAULT_CONFLUENCE_TOKEN",
         "ATLS_DEFAULT_BITBUCKET_TOKEN",
+        "ATLS_DEFAULT_ZEPHYR_TOKEN",
     ):
         monkeypatch.delenv(var, raising=False)
     return tmp_path
@@ -418,6 +420,7 @@ def _wizard_input(
     jira: tuple[str, ...] = ("s",),
     conf: tuple[str, ...] = ("s",),
     bb: tuple[str, ...] = ("s",),
+    zephyr: tuple[str, ...] = ("s",),
     install_claude: str = "n",
     install_codex: str = "n",
     install_copilot: str = "n",
@@ -426,11 +429,11 @@ def _wizard_input(
     """Build wizard stdin.
 
     The wizard is keyring-only — there is no storage prompt. Each product tuple is (action,) or
-    (action, url, pat). The product-block walks Jira → Confluence → Bitbucket, then the agent step
-    asks claude/codex/copilot/gigacode.
+    (action, url, pat). The product-block walks Jira → Confluence → Bitbucket → Zephyr, then the
+    agent step asks claude/codex/copilot/gigacode.
     """
     lines: list[str] = []
-    for spec in (jira, conf, bb):
+    for spec in (jira, conf, bb, zephyr):
         lines.extend(spec)
     lines += [install_claude, install_codex, install_copilot, install_gigacode]
     return "\n".join(lines) + "\n"
@@ -454,6 +457,7 @@ class TestWizardURLs:
         assert prof.jira_url == "https://jira.example.com"
         assert prof.confluence_url is None
         assert prof.bitbucket_url is None
+        assert prof.zephyr_url is None
 
     def test_keep_all_when_pressing_enter(self, wizard_env: Path) -> None:
         """Pure-Enter run with seeded URLs must be non-destructive."""
@@ -468,8 +472,8 @@ class TestWizardURLs:
 
         runner = CliRunner()
         # Default for each seeded product is 's' (skip = keep as-is); for agent install defaults
-        # are Y. Enter × 3 (jira/conf/bb) + 'n' × 4 to explicitly decline asset installs.
-        result = runner.invoke(app, ["setup"], input="\n\n\nn\nn\nn\nn\n")
+        # are Y. Enter × 4 (jira/conf/bb/zephyr) + 'n' × 4 to explicitly decline asset installs.
+        result = runner.invoke(app, ["setup"], input="\n\n\n\nn\nn\nn\nn\n")
 
         assert result.exit_code == 0
         prof = load_config().profiles["default"]
@@ -639,7 +643,7 @@ class TestTTYGuard:
 
         # Override the conftest `bypass_tty_guard` (which makes the guard a no-op) by
         # restoring the real implementation, then make _is_tty True. The wizard should
-        # reach product prompts (we just feed skip × 3 + n × 4 and verify exit 0).
+        # reach product prompts (we just feed skip × 4 + n × 4 and verify exit 0).
         from atlassian_skills.cli.setup import _ensure_interactive_terminal as real_guard
 
         monkeypatch.setattr(setup_mod, "_ensure_interactive_terminal", real_guard)
@@ -648,8 +652,8 @@ class TestTTYGuard:
         from atlassian_skills.cli.main import app
 
         runner = CliRunner()
-        # skip × 3 (jira/conf/bb) + n × 4 (decline agent installs).
-        result = runner.invoke(app, ["setup"], input="s\ns\ns\nn\nn\nn\nn\n")
+        # skip × 4 (jira/conf/bb/zephyr) + n × 4 (decline agent installs).
+        result = runner.invoke(app, ["setup"], input="s\ns\ns\ns\nn\nn\nn\nn\n")
 
         assert result.exit_code == 0
         assert "interactive terminal" not in result.output
@@ -669,7 +673,7 @@ class TestFishNoLongerAborts:
         assert result.exit_code == 0
         assert "fish shell detected" not in result.output
         # The wizard reached the first product prompt.
-        assert "[1/4]" in result.output
+        assert "[1/5]" in result.output
 
 
 class TestCopilotInstall:

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-A Python CLI + Claude Code Skill that lets LLM agents drive our internal Atlassian Server/DC stack (Jira, Confluence, Bitbucket, Bamboo) in a token-efficient way. Serves as a complete replacement for the `mcp-atlassian` MCP server.
+A Python CLI + Claude Code Skill that lets LLM agents drive our internal Atlassian Server/DC stack (Jira, Confluence, Bitbucket, Zephyr Scale, Bamboo) in a token-efficient way. Serves as a complete replacement for the `mcp-atlassian` MCP server.
 
 - **Binary**: `atls`
 - **Package**: `atlassian-skills`
@@ -51,6 +51,9 @@ src/atlassian_skills/
 ├── bitbucket/
 │   ├── client.py           # BitbucketClient(BaseClient)
 │   └── models.py           # pydantic response models (PR, Comment, Branch, Task, etc.)
+├── zephyr/
+│   ├── client.py           # ZephyrClient(BaseClient), /rest/atm/1.0
+│   └── models.py           # pydantic response models (test cases, plans, runs, results)
 └── bamboo/                 # planned
 
 tests/
@@ -114,6 +117,7 @@ docs/                       # design docs and analyses
 # Environment variables (default, recommended)
 export ATLS_CORP_JIRA_TOKEN="your-pat"
 export ATLS_CORP_CONFLUENCE_TOKEN="your-pat"
+export ATLS_CORP_ZEPHYR_TOKEN="your-jira-or-zephyr-pat"
 ```
 
 ```toml
@@ -122,12 +126,14 @@ export ATLS_CORP_CONFLUENCE_TOKEN="your-pat"
 # Env vars (default)
 [profiles.corp]
 jira_url = "https://jira.corp.example.com"
+zephyr_url = "https://jira.corp.example.com"
 
 # System keyring — uses platform native store (macOS Keychain, Windows Credential Manager, Linux Secret Service)
 # The keyring package is a base dependency (bundled by default — no extra needed)
 # Keyring entry: service="atls-<profile>", account="<product>_token"
 [profiles.corp]
 jira_url = "https://jira.corp.example.com"
+zephyr_url = "https://jira.corp.example.com"
 storage = "keyring"
 
 # Shell command — cross-platform; the command is whatever your OS/secret manager supports
@@ -137,6 +143,7 @@ storage = "keyring"
 #           "powershell -NoProfile -Command \"(Get-StoredCredential -Target jira-pat).GetNetworkCredential().Password\"" (Windows)
 [profiles.corp]
 jira_url = "https://jira.corp.example.com"
+zephyr_url = "https://jira.corp.example.com"
 storage = "command"
 credential_command = "op read op://vault/atlassian/token"      # shared across products
 # jira_command / confluence_command / bitbucket_command override per product (optional)
