@@ -9,6 +9,17 @@
 
 A token-efficient CLI that brings [mcp-atlassian](https://github.com/sooperset/mcp-atlassian) functionality to the command line — optimized for LLM agent workflows on Atlassian Server/DC.
 
+| What you need | Command | Result |
+|---|---|---|
+| Install the CLI | `uv tool install atlassian-skills` | Installs the `atls` binary globally for the current user. |
+| Install with pipx | `pipx install atlassian-skills` | Alternative isolated global install. |
+| Install from this repo | `uv sync && uv run atls --help` | Local development install using the checked-out source. |
+| Configure URLs, tokens, and skills | `atls setup` | Interactive wizard for Jira, Confluence, Bitbucket, Zephyr, and AI agent skills. |
+| Refresh skills only | `atls setup --skills-only` | Reinstalls bundled skill files without prompting for tokens. |
+| Verify setup | `atls doctor` | Checks paths, skill markers, auth status, and version freshness. |
+
+Skill install targets: Claude Code `~/.claude/skills/atls/SKILL.md`, Codex `~/.codex/skills/atls/SKILL.md`, GitHub Copilot `~/.copilot/skills/atls/SKILL.md`, GigaCode `~/.gigacode/skills/atls/SKILL.md`.
+
 mcp-atlassian is great for Cloud setups, but on Server/DC its MCP protocol overhead and verbose JSON responses consume tokens fast. It also lacks lossless Confluence markup round-tripping — edits via MCP can silently alter page content.
 
 **atlassian-skills** re-implements the same Jira and Confluence operations as a lightweight CLI with compact output, achieving **≥50% token reduction**. It uses [cfxmark](https://github.com/eunsanMountain/cfxmark) for **lossless Confluence XHTML ↔ Markdown conversion**, enabling agents to pull a page as Markdown, edit it, and push it back without any content loss.
