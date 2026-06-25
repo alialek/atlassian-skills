@@ -12,8 +12,6 @@ A token-efficient CLI that brings [mcp-atlassian](https://github.com/sooperset/m
 | What you need | Command | Result |
 |---|---|---|
 | Install the CLI | `uv tool install atlassian-skills` | Installs the `atls` binary globally for the current user. |
-| Install with pipx | `pipx install atlassian-skills` | Alternative isolated global install. |
-| Install from this repo | `uv sync && uv run atls --help` | Local development install using the checked-out source. |
 | Configure URLs, tokens, and skills | `atls setup` | Interactive wizard for Jira, Confluence, Bitbucket, Zephyr, and AI agent skills. |
 | Refresh skills only | `atls setup --skills-only` | Reinstalls bundled skill files without prompting for tokens. |
 | Verify setup | `atls doctor` | Checks paths, skill markers, auth status, and version freshness. |
