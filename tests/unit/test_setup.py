@@ -466,6 +466,25 @@ class TestWizardURLs:
         assert prof.bitbucket_url is None
         assert prof.zephyr_url is None
 
+    def test_add_zephyr_only(self, wizard_env: Path) -> None:
+        from atlassian_skills.cli.main import app
+        from atlassian_skills.core.config import load_config
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["setup"],
+            input=_wizard_input(zephyr=("a", "https://jira.example.com", "t-zephyr")),
+        )
+
+        assert result.exit_code == 0, result.output
+        prof = load_config().profiles.get("default")
+        assert prof is not None
+        assert prof.jira_url is None
+        assert prof.confluence_url is None
+        assert prof.bitbucket_url is None
+        assert prof.zephyr_url == "https://jira.example.com"
+
     def test_keep_all_when_pressing_enter(self, wizard_env: Path) -> None:
         """Pure-Enter run with seeded URLs must be non-destructive."""
         from atlassian_skills.cli.main import app
@@ -1327,11 +1346,15 @@ class TestSkillsOnlyProductsScoping:
 
 class TestTriggerTerms:
     def test_jira_zephyr(self) -> None:
-        assert _trigger_terms(["jira", "zephyr"]) == "Jira/Джира/Жира/Zephyr/Зефир"
+        assert (
+            _trigger_terms(["jira", "zephyr"])
+            == "Jira/Джира/Жира/JQL/PROJ-123/задача/тикет/баг/спринт/эпик/Zephyr/Зефир/тесткейс/тест-ран"
+        )
 
     def test_none_is_all(self) -> None:
         terms = _trigger_terms(None)
-        assert "Конфлюенс" in terms and "Битбакет" in terms
+        assert "Конфлюенс" in terms and "CQL" in terms
+        assert "Битбакет" in terms and "репозиторий" in terms
 
     def test_no_korean(self) -> None:
         assert "지라" not in _trigger_terms(None)
@@ -1349,8 +1372,15 @@ class TestCanonicalFrontmatterScoping:
 
     def test_default_scope_frontmatter_is_russian_jira_zephyr_only(self) -> None:
         frontmatter = _scope_skill_md(self._canonical(), ["jira", "zephyr"]).split("---", 2)[1]
-        assert "Джира" in frontmatter and "Зефир" in frontmatter
-        for term in ("Confluence", "Конфлюенс", "Bitbucket", "Битбакет", "지라"):
+        assert "Джира" in frontmatter and "тикет" in frontmatter
+        assert "Зефир" in frontmatter and "тесткейс" in frontmatter
+        for term in ("Confluence", "Конфлюенс", "CQL", "Bitbucket", "Битбакет", "지라"):
+            assert term not in frontmatter
+
+    def test_jira_only_frontmatter_does_not_advertise_zephyr_or_confluence_terms(self) -> None:
+        frontmatter = _scope_skill_md(self._canonical(), ["jira"]).split("---", 2)[1]
+        assert "JQL" in frontmatter and "тикет" in frontmatter
+        for term in ("CQL", "тесткейс", "тест-ран", "Zephyr", "Зефир"):
             assert term not in frontmatter
 
     def test_no_korean_anywhere_in_default_scope(self) -> None:
@@ -1358,14 +1388,23 @@ class TestCanonicalFrontmatterScoping:
         for korean in ("지라", "컨플루언스", "비트버킷", "지파이어", "아틀라시안"):
             assert korean not in scoped
 
+    def test_frontmatter_and_routing_share_product_triggers(self) -> None:
+        products = ["jira", "zephyr"]
+        frontmatter = _scope_skill_md(self._canonical(), products).split("---", 2)[1]
+        for term in _trigger_terms(products).split("/"):
+            assert term in frontmatter
+
 
 class TestRoutingBlockScoping:
     def test_scoped_block_is_russian_jira_zephyr(self) -> None:
         block = _claude_md_block(["jira", "zephyr"])
-        assert "Jira/Джира/Жира/Zephyr/Зефир" in block
+        assert "Jira/Джира/Жира/JQL/PROJ-123/задача/тикет/баг/спринт/эпик" in block
+        assert "Zephyr/Зефир/тесткейс/тест-ран" in block
         assert "Confluence" not in block and "Битбакет" not in block
+        assert "CQL" not in block
         assert "지라" not in block
 
     def test_full_block_lists_all_products(self) -> None:
         block = _claude_md_block(["jira", "confluence", "bitbucket", "zephyr"])
-        assert "Конфлюенс" in block and "Битбакет" in block
+        assert "Конфлюенс" in block and "CQL" in block
+        assert "Битбакет" in block and "репозиторий" in block

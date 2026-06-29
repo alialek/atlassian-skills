@@ -416,10 +416,10 @@ _CANONICAL_SKILL_DIR = ASSETS_DIR / "skills" / "atls"
 # injected routing blocks so they always advertise the same products. This fork is Russian-only by
 # design — there is no locale switch.
 _PRODUCT_TRIGGERS: dict[str, tuple[str, ...]] = {
-    "jira": ("Jira", "Джира", "Жира"),
-    "confluence": ("Confluence", "Конфлюенс"),
-    "bitbucket": ("Bitbucket", "Битбакет"),
-    "zephyr": ("Zephyr", "Зефир"),
+    "jira": ("Jira", "Джира", "Жира", "JQL", "PROJ-123", "задача", "тикет", "баг", "спринт", "эпик"),
+    "confluence": ("Confluence", "Конфлюенс", "CQL"),
+    "bitbucket": ("Bitbucket", "Битбакет", "PR", "pull request", "репозиторий", "ветка"),
+    "zephyr": ("Zephyr", "Зефир", "тесткейс", "тест-ран"),
 }
 
 
@@ -865,6 +865,7 @@ def _wizard_product_step(  # noqa: C901 — sequential prompt narrative reads be
                 "jira": "https://jira.example.com/",
                 "confluence": "https://confluence.example.com/",
                 "bitbucket": "https://bitbucket.example.com/",
+                "zephyr": "https://jira.example.com/",
             }[product]
             new_url_raw = typer.prompt(
                 f"  {label} URL (blank to skip) (e.g. {example})", default="", show_default=False

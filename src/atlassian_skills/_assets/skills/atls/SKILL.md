@@ -4,20 +4,20 @@ description: |
   Работа с Atlassian на Server/DC через atls. Load BEFORE the first atls command.
 
   Without this body, you WILL guess atls conventions wrong:
-  JQL/CQL is positional, use --format=json not -f json, exit 5=stale.
+  Query arguments are positional, use --format=json not -f json, exit 5=stale.
 
-  TRIGGER: atls, JQL, CQL, PROJ-123, задача, тикет, баг, спринт, эпик, тесткейс, тест-ран,
+  TRIGGER: atls,
   <!-- atls:product:jira:start -->
-  Jira, Джира, Жира,
+  Jira, Джира, Жира, JQL, PROJ-123, задача, тикет, баг, спринт, эпик,
   <!-- atls:product:jira:end -->
   <!-- atls:product:confluence:start -->
-  Confluence, Конфлюенс,
+  Confluence, Конфлюенс, CQL,
   <!-- atls:product:confluence:end -->
   <!-- atls:product:bitbucket:start -->
-  Bitbucket, Битбакет,
+  Bitbucket, Битбакет, PR, pull request, репозиторий, ветка,
   <!-- atls:product:bitbucket:end -->
   <!-- atls:product:zephyr:start -->
-  Zephyr, Зефир.
+  Zephyr, Зефир, тесткейс, тест-ран.
   <!-- atls:product:zephyr:end -->
 ---
 
