@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import typer
@@ -248,14 +249,19 @@ def _get_claude_md_path() -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _install(source: Path, target: Path) -> str:
+def _install(source: Path, target: Path, *, transform: Callable[[str], str] | None = None) -> str:
     """Copy source to target. Backup existing. Return status message.
 
-    Short-circuits when source bytes equal target bytes — avoids .bak churn on every
-    `atls upgrade` (which silently runs `setup --skills-only` after each upgrade,
-    even when SKILL.md content hasn't changed across the patch release).
+    Short-circuits when the (optionally transformed) source bytes equal target bytes — avoids
+    .bak churn on every `atls upgrade` (which silently runs `setup --skills-only` after each
+    upgrade, even when SKILL.md content hasn't changed across the patch release).
+
+    `transform` post-processes the source text before writing (used to filter the SKILL.md
+    body down to the configured products — see `_scope_skill_md`).
     """
     new_content = source.read_text(encoding="utf-8")
+    if transform is not None:
+        new_content = transform(new_content)
     if target.exists():
         try:
             existing = target.read_text(encoding="utf-8")
@@ -272,10 +278,14 @@ def _install(source: Path, target: Path) -> str:
     return f"  {target}: installed"
 
 
-def _install_tree(source_dir: Path, target_dir: Path) -> list[str]:
-    """Copy an asset tree into the target directory, preserving relative paths."""
+def _install_tree(source_dir: Path, target_dir: Path, *, transform: Callable[[str], str] | None = None) -> list[str]:
+    """Copy an asset tree into the target directory, preserving relative paths.
+
+    `transform` is applied to every file's text (the skill tree is text-only); marker-free
+    files are returned unchanged by `_scope_skill_md`, so it is safe to pass for the whole tree.
+    """
     return [
-        _install(source_file, target_dir / source_file.relative_to(source_dir))
+        _install(source_file, target_dir / source_file.relative_to(source_dir), transform=transform)
         for source_file in sorted(source_dir.rglob("*"))
         if source_file.is_file()
     ]
@@ -393,6 +403,70 @@ def _legacy_codex_skill_notice() -> str | None:
 
 
 _CANONICAL_SKILL_DIR = ASSETS_DIR / "skills" / "atls"
+
+
+# ---------------------------------------------------------------------------
+# Product scoping — shrink SKILL.md to the products the user actually configured
+# ---------------------------------------------------------------------------
+
+
+def _scope_skill_md(content: str, products: list[str] | None) -> str:
+    """Filter product-marked regions out of a SKILL.md body.
+
+    The canonical SKILL.md wraps each product's sections in standalone marker lines —
+    `<!-- atls:product:<name>:start -->` … `<!-- atls:product:<name>:end -->`. For the kept
+    products (every product when `products is None`) the marker lines are stripped and the body
+    retained; for the rest, the whole region is removed. The installed skill therefore never
+    contains marker comments, and `products=None` reproduces the pre-marker file byte-for-byte.
+    """
+    keep = set(_PRODUCTS) if products is None else set(products)
+    out = content
+    for product in _PRODUCTS:
+        start = f"<!-- atls:product:{product}:start -->"
+        end = f"<!-- atls:product:{product}:end -->"
+        if product in keep:
+            out = out.replace(start + "\n", "").replace(end + "\n", "")
+        else:
+            out = re.sub(
+                re.escape(start) + r"\n.*?" + re.escape(end) + r"\n",
+                "",
+                out,
+                flags=re.DOTALL,
+            )
+    # Collapse blank-line runs left behind by removed regions (the source never has >2).
+    return re.sub(r"\n{3,}", "\n\n", out)
+
+
+def _parse_products_option(value: str) -> list[str] | None:
+    """Normalize a ``--products`` CLI value to a canonical product list, or None for 'all'.
+
+    Accepts a comma-separated list of product names (``jira,confluence,bitbucket,zephyr``) or
+    the literal ``all``. Returns the products in canonical order with duplicates removed; ``all``
+    or an empty value yields ``None`` (= install the full skill). Raises on unknown names.
+    """
+    items = [p.strip().lower() for p in value.split(",") if p.strip()]
+    if not items or "all" in items:
+        return None
+    unknown = [p for p in items if p not in _PRODUCTS]
+    if unknown:
+        raise typer.BadParameter(f"unknown product(s): {', '.join(unknown)}. Valid: {', '.join(_PRODUCTS)}, all")
+    return [p for p in _PRODUCTS if p in items]
+
+
+def _configured_skill_products() -> list[str] | None:
+    """Read the persisted `skill_products` scope from config (None = full skill)."""
+    from atlassian_skills.core.config import load_config
+
+    return load_config().skill_products
+
+
+def _persist_skill_products(products: list[str] | None) -> None:
+    """Persist the SKILL.md product scope so it survives `atls upgrade`."""
+    from atlassian_skills.core.config import load_config, save_config
+
+    config = load_config()
+    config.skill_products = products
+    save_config(config)
 
 
 # ---------------------------------------------------------------------------
@@ -624,26 +698,41 @@ def _prompt_agent_install(label: str, default: bool = True) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _refresh_skills(*, claude: bool, codex: bool, copilot: bool = False, gigacode: bool = False) -> list[str]:
-    """Install canonical SKILL.md tree + inject routing blocks. Returns status messages."""
+def _refresh_skills(
+    *,
+    claude: bool,
+    codex: bool,
+    copilot: bool = False,
+    gigacode: bool = False,
+    products: list[str] | None = None,
+) -> list[str]:
+    """Install canonical SKILL.md tree + inject routing blocks. Returns status messages.
+
+    `products` scopes the installed SKILL.md to those products (None = full skill). The transform
+    runs in every case so marker comments are always stripped from the installed file.
+    """
+
+    def transform(content: str) -> str:
+        return _scope_skill_md(content, products)
+
     msgs: list[str] = []
     if codex:
-        msgs.extend(_install_tree(_CANONICAL_SKILL_DIR, _get_codex_skill_target().parent))
+        msgs.extend(_install_tree(_CANONICAL_SKILL_DIR, _get_codex_skill_target().parent, transform=transform))
         msgs.append(_inject_codex_agents_block())
         legacy = _legacy_codex_skill_notice()
         if legacy:
             msgs.append(legacy)
     if claude:
-        msgs.extend(_install_tree(_CANONICAL_SKILL_DIR, _get_claude_skill_target().parent))
+        msgs.extend(_install_tree(_CANONICAL_SKILL_DIR, _get_claude_skill_target().parent, transform=transform))
         msgs.append(_inject_claude_md_block())
         legacy = _legacy_claude_command_notice()
         if legacy:
             msgs.append(legacy)
     if copilot:
-        msgs.extend(_install_tree(_CANONICAL_SKILL_DIR, _get_copilot_skill_target().parent))
+        msgs.extend(_install_tree(_CANONICAL_SKILL_DIR, _get_copilot_skill_target().parent, transform=transform))
         msgs.append(_inject_copilot_instructions_block())
     if gigacode:
-        msgs.extend(_install_tree(_CANONICAL_SKILL_DIR, _get_gigacode_skill_target().parent))
+        msgs.extend(_install_tree(_CANONICAL_SKILL_DIR, _get_gigacode_skill_target().parent, transform=transform))
     return msgs
 
 
@@ -786,7 +875,7 @@ def _wizard_product_step(  # noqa: C901 — sequential prompt narrative reads be
     return (current_url, "keep") if current_url else (None, "skip"), None
 
 
-def _wizard() -> None:  # noqa: C901 — sequential narrative reads better than splitting
+def _wizard(products: list[str] | None = None) -> None:  # noqa: C901 — sequential narrative reads better than splitting
     _ensure_interactive_terminal()
 
     typer.echo(_AGENT_WARNING)
@@ -898,6 +987,7 @@ def _wizard() -> None:  # noqa: C901 — sequential narrative reads better than 
             codex=install_codex,
             copilot=install_copilot,
             gigacode=install_gigacode,
+            products=products,
         ):
             typer.echo(f"  {msg.strip()}")
     if install_copilot and _is_wsl():
@@ -943,16 +1033,33 @@ def setup_entry(
         "--skills-only",
         help="Silently reinstall AI agent skill assets (used by `atls upgrade`).",
     ),
+    products: str | None = typer.Option(
+        None,
+        "--products",
+        help=(
+            "Comma-separated products to keep in the generated SKILL.md "
+            "(jira,confluence,bitbucket,zephyr) or 'all'. Persisted to config so it survives "
+            "`atls upgrade`. Omit to keep the current scope."
+        ),
+    ),
 ) -> None:
     """Run the interactive setup wizard. With --skills-only, refresh skill assets silently."""
     if ctx.invoked_subcommand is not None:
         return
+    # Resolve + persist the SKILL.md product scope. An explicit --products overrides and is saved;
+    # otherwise reuse whatever scope already lives in config (None = full skill for every product).
+    if products is not None:
+        scope = _parse_products_option(products)
+        _persist_skill_products(scope)
+    else:
+        scope = _configured_skill_products()
     if skills_only:
         for msg in _refresh_skills(
             claude=True,
             codex=True,
             copilot=_get_copilot_skill_target().exists(),
             gigacode=_get_gigacode_skill_target().exists(),
+            products=scope,
         ):
             typer.echo(msg)
         return
@@ -970,7 +1077,7 @@ def setup_entry(
             err=True,
         )
         raise typer.Exit(1)
-    _wizard()
+    _wizard(products=scope)
 
 
 # ---------------------------------------------------------------------------
@@ -1001,7 +1108,7 @@ def _show_paths() -> None:
 def setup_codex() -> None:
     """[deprecated] Install atls skill for Codex. Use `atls setup` (wizard) instead."""
     _emit_deprecation("codex")
-    for msg in _refresh_skills(claude=False, codex=True):
+    for msg in _refresh_skills(claude=False, codex=True, products=_configured_skill_products()):
         typer.echo(msg)
 
 
@@ -1009,7 +1116,7 @@ def setup_codex() -> None:
 def setup_claude() -> None:
     """[deprecated] Install atls skill for Claude Code. Use `atls setup` (wizard) instead."""
     _emit_deprecation("claude")
-    for msg in _refresh_skills(claude=True, codex=False):
+    for msg in _refresh_skills(claude=True, codex=False, products=_configured_skill_products()):
         typer.echo(msg)
 
 
@@ -1017,7 +1124,7 @@ def setup_claude() -> None:
 def setup_gigacode() -> None:
     """[deprecated] Install atls skill for GigaCode. Use `atls setup` (wizard) instead."""
     _emit_deprecation("gigacode")
-    for msg in _refresh_skills(claude=False, codex=False, gigacode=True):
+    for msg in _refresh_skills(claude=False, codex=False, gigacode=True, products=_configured_skill_products()):
         typer.echo(msg)
 
 
@@ -1025,7 +1132,7 @@ def setup_gigacode() -> None:
 def setup_all() -> None:
     """[deprecated] Install skills for Codex, Claude Code, and GigaCode. Use `atls setup` instead."""
     _emit_deprecation("all")
-    for msg in _refresh_skills(claude=True, codex=True, gigacode=True):
+    for msg in _refresh_skills(claude=True, codex=True, gigacode=True, products=_configured_skill_products()):
         typer.echo(msg)
 
 

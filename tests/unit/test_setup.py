@@ -7,14 +7,20 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from atlassian_skills.cli.setup import (
+    _CANONICAL_SKILL_DIR,
     _claude_md_block,
+    _configured_skill_products,
     _inject_claude_md_block,
     _inject_codex_agents_block,
     _inject_copilot_instructions_block,
     _install,
+    _parse_products_option,
+    _persist_skill_products,
+    _scope_skill_md,
 )
 
 # ---------------------------------------------------------------------------
@@ -795,9 +801,7 @@ class TestGigaCodeInstall:
         assert result.exit_code == 0
         assert not (tmp_path / ".gigacode" / "skills" / "atls" / "SKILL.md").exists()
 
-    def test_skills_only_refreshes_gigacode_when_present(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_skills_only_refreshes_gigacode_when_present(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import atlassian_skills.cli.setup as setup_mod
 
         asset_root = _make_asset_root(tmp_path)
@@ -1122,3 +1126,174 @@ class TestWizardMenuDefault:
 
         assert result.exit_code == 0, result.output
         assert "[s]kip / [e]dit / [r]emove [default=s]" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Product scoping — _scope_skill_md / _parse_products_option / --products
+# ---------------------------------------------------------------------------
+
+_ALL_PRODUCTS = ("jira", "confluence", "bitbucket", "zephyr")
+
+
+class TestCanonicalSkillMarkers:
+    """The canonical asset must carry balanced product markers, else scoping is a silent no-op."""
+
+    def test_canonical_has_balanced_markers(self) -> None:
+        content = (_CANONICAL_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+        for product in _ALL_PRODUCTS:
+            starts = content.count(f"<!-- atls:product:{product}:start -->")
+            ends = content.count(f"<!-- atls:product:{product}:end -->")
+            assert starts == ends, f"{product}: {starts} start vs {ends} end markers"
+            assert starts >= 1, f"{product}: expected at least one marked region"
+
+
+class TestScopeSkillMd:
+    def _canonical(self) -> str:
+        return (_CANONICAL_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+
+    def test_none_strips_all_markers_keeps_everything(self) -> None:
+        scoped = _scope_skill_md(self._canonical(), None)
+        assert "atls:product:" not in scoped
+        assert "atls jira issue get KEY" in scoped
+        assert "atls confluence page get ID" in scoped
+        assert "bitbucket" in scoped
+        assert "atls zephyr testcase get KEY" in scoped
+
+    def test_none_is_byte_identical_to_unmarked_original(self) -> None:
+        """Default install must reproduce the pre-marker file exactly — no churn for existing users."""
+        canonical = self._canonical()
+        # Independently derive the expected text by dropping whole marker lines.
+        expected = "".join(line for line in canonical.splitlines(keepends=True) if "atls:product:" not in line)
+        assert _scope_skill_md(canonical, None) == expected
+
+    def test_subset_drops_other_products(self) -> None:
+        full = _scope_skill_md(self._canonical(), None)
+        scoped = _scope_skill_md(self._canonical(), ["jira", "zephyr"])
+        assert "atls:product:" not in scoped
+        # Kept
+        assert "atls jira issue get KEY" in scoped
+        assert "atls zephyr testcase get KEY" in scoped
+        # Dropped Confluence / Bitbucket regions
+        assert "## page update vs push-md" not in scoped
+        assert "atls confluence page push-md" not in scoped
+        assert "├── bitbucket" not in scoped and "└── bitbucket" not in scoped
+        assert len(scoped) < len(full)
+
+    def test_single_product_drops_the_rest(self) -> None:
+        scoped = _scope_skill_md(self._canonical(), ["jira"])
+        assert "atls zephyr" not in scoped
+        assert "atls confluence page" not in scoped
+        assert "atls jira issue get KEY" in scoped
+
+    def test_no_orphan_blank_runs(self) -> None:
+        assert "\n\n\n" not in _scope_skill_md(self._canonical(), ["jira"])
+
+
+class TestParseProductsOption:
+    def test_list(self) -> None:
+        assert _parse_products_option("jira,zephyr") == ["jira", "zephyr"]
+
+    def test_canonical_order_and_dedup(self) -> None:
+        assert _parse_products_option("zephyr,jira,jira") == ["jira", "zephyr"]
+
+    def test_whitespace_and_case(self) -> None:
+        assert _parse_products_option(" Jira , ZEPHYR ") == ["jira", "zephyr"]
+
+    def test_all_means_full_skill(self) -> None:
+        assert _parse_products_option("all") is None
+
+    def test_empty_means_full_skill(self) -> None:
+        assert _parse_products_option("") is None
+
+    def test_unknown_raises(self) -> None:
+        with pytest.raises(typer.BadParameter):
+            _parse_products_option("jira,wiki")
+
+
+class TestInstallTransform:
+    def test_transform_applied_before_write(self, tmp_path: Path) -> None:
+        source = tmp_path / "SKILL.md"
+        source.write_text(
+            "KEEP\n<!-- atls:product:confluence:start -->\nDROP\n<!-- atls:product:confluence:end -->\n",
+            encoding="utf-8",
+        )
+        target = tmp_path / "out" / "SKILL.md"
+        _install(source, target, transform=lambda c: _scope_skill_md(c, ["jira"]))
+        out = target.read_text(encoding="utf-8")
+        assert "KEEP" in out
+        assert "DROP" not in out
+        assert "atls:product:" not in out
+
+
+class TestSkillProductsPersistence:
+    def test_persist_and_read_roundtrip(self, wizard_env: Path) -> None:
+        assert _configured_skill_products() is None  # default = full skill
+        _persist_skill_products(["jira", "zephyr"])
+        assert _configured_skill_products() == ["jira", "zephyr"]
+        assert "skill_products" in (wizard_env / "config.toml").read_text(encoding="utf-8")
+        _persist_skill_products(None)  # 'all' clears the scope
+        assert _configured_skill_products() is None
+
+
+def _marked_asset_root(tmp_path: Path) -> Path:
+    asset_root = tmp_path / "assets"
+    skill_dir = asset_root / "skills" / "atls"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "# atls\n"
+        "<!-- atls:product:jira:start -->\nJIRA SECTION\n<!-- atls:product:jira:end -->\n"
+        "<!-- atls:product:confluence:start -->\nCONFLUENCE SECTION\n<!-- atls:product:confluence:end -->\n",
+        encoding="utf-8",
+    )
+    return asset_root
+
+
+class TestSkillsOnlyProductsScoping:
+    def test_skills_only_respects_persisted_scope(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import atlassian_skills.cli.setup as setup_mod
+        import atlassian_skills.core.config as config_mod
+
+        asset_root = _marked_asset_root(tmp_path)
+        _stub_paths(monkeypatch, tmp_path, asset_root)
+        monkeypatch.setattr(config_mod, "config_path", lambda: tmp_path / "config.toml")
+        _persist_skill_products(["jira"])
+
+        result = CliRunner().invoke(setup_mod.setup_app, ["--skills-only"])
+        assert result.exit_code == 0, result.output
+
+        installed = (tmp_path / ".claude" / "skills" / "atls" / "SKILL.md").read_text(encoding="utf-8")
+        assert "JIRA SECTION" in installed
+        assert "CONFLUENCE SECTION" not in installed
+        assert "atls:product:" not in installed
+
+    def test_products_flag_persists_and_scopes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import atlassian_skills.cli.setup as setup_mod
+        import atlassian_skills.core.config as config_mod
+
+        asset_root = _marked_asset_root(tmp_path)
+        _stub_paths(monkeypatch, tmp_path, asset_root)
+        monkeypatch.setattr(config_mod, "config_path", lambda: tmp_path / "config.toml")
+
+        result = CliRunner().invoke(setup_mod.setup_app, ["--skills-only", "--products", "jira"])
+        assert result.exit_code == 0, result.output
+
+        installed = (tmp_path / ".claude" / "skills" / "atls" / "SKILL.md").read_text(encoding="utf-8")
+        assert "CONFLUENCE SECTION" not in installed
+        # Persisted so the next bare `atls upgrade` keeps the scope.
+        assert _configured_skill_products() == ["jira"]
+
+    def test_default_install_is_full_skill(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import atlassian_skills.cli.setup as setup_mod
+        import atlassian_skills.core.config as config_mod
+
+        asset_root = _marked_asset_root(tmp_path)
+        _stub_paths(monkeypatch, tmp_path, asset_root)
+        monkeypatch.setattr(config_mod, "config_path", lambda: tmp_path / "config.toml")
+
+        result = CliRunner().invoke(setup_mod.setup_app, ["--skills-only"])
+        assert result.exit_code == 0, result.output
+
+        installed = (tmp_path / ".claude" / "skills" / "atls" / "SKILL.md").read_text(encoding="utf-8")
+        assert "JIRA SECTION" in installed
+        assert "CONFLUENCE SECTION" in installed
+        assert "atls:product:" not in installed

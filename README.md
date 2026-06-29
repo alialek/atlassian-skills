@@ -14,6 +14,7 @@ A token-efficient CLI that brings [mcp-atlassian](https://github.com/sooperset/m
 | Install the CLI | `uv tool install atlassian-skills` | Installs the `atls` binary globally for the current user. |
 | Configure URLs, tokens, and skills | `atls setup` | Interactive wizard for Jira, Confluence, Bitbucket, Zephyr, and AI agent skills. |
 | Refresh skills only | `atls setup --skills-only` | Reinstalls bundled skill files without prompting for tokens. |
+| Trim the skill to your products | `atls setup --products jira,zephyr` | Drops unused product sections from the installed `SKILL.md` to cut its context cost. Persisted; `--products all` restores the full skill. |
 | Verify setup | `atls doctor` | Checks paths, skill markers, auth status, and version freshness. |
 
 Skill install targets: Claude Code `~/.claude/skills/atls/SKILL.md`, Codex `~/.codex/skills/atls/SKILL.md`, GitHub Copilot `~/.copilot/skills/atls/SKILL.md`, GigaCode `~/.gigacode/skills/atls/SKILL.md`.

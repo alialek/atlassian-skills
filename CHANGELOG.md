@@ -20,6 +20,20 @@ use the same commands — on Windows they run identically in PowerShell, cmd, or
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Product-scoped `SKILL.md`** — the installed skill can now be trimmed to the products you
+  actually use, cutting the skill's standing token cost in the agent's context. Set it once and
+  it survives `atls upgrade`:
+  - `atls setup --products jira,zephyr` (or `--products` in the wizard) keeps only those products'
+    sections and persists the choice to `config.toml` as `skill_products`.
+  - `atls setup --products all` (or leaving `skill_products` unset) installs the full skill —
+    the default, so existing installs are byte-for-byte unchanged.
+  - The canonical `SKILL.md` carries `<!-- atls:product:<name>:start/end -->` markers; install-time
+    filtering strips the markers and any unselected product regions, so the installed file never
+    contains marker comments.
+
 ## [0.2.8] - 2026-05-29
 
 ### Added

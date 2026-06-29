@@ -51,6 +51,12 @@ class Config(BaseModel):
 
     default_profile: str = "default"
     profiles: dict[str, Profile] = {}
+    # Which products' sections to keep in the generated SKILL.md. `None` (the default)
+    # installs the full skill for every product — preserving pre-0.2.9 behavior. Set to a
+    # subset (e.g. ["jira", "zephyr"]) to drop the sections you never use and shrink the
+    # skill's standing token cost in the agent's context. Persisted here so it survives
+    # `atls upgrade` (which reinstalls the skill via `setup --skills-only`).
+    skill_products: list[str] | None = None
 
 
 def config_path() -> Path:
