@@ -51,6 +51,12 @@ class Config(BaseModel):
 
     default_profile: str = "default"
     profiles: dict[str, Profile] = {}
+    # Which products' sections to keep in the generated SKILL.md (frontmatter triggers, body, and
+    # the injected routing blocks). This fork serves a Jira+Zephyr team, so it defaults to
+    # ["jira", "zephyr"] — dropping the Confluence/Bitbucket sections shrinks the skill's standing
+    # token cost in the agent's context. Use `atls setup --products all` (which stores the full
+    # list) to keep everything. Persisted here so it survives `atls upgrade`.
+    skill_products: list[str] = ["jira", "zephyr"]
 
 
 def config_path() -> Path:

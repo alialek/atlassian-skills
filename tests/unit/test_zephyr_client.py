@@ -96,7 +96,9 @@ def test_testrun_and_results_operations() -> None:
         return_value=httpx.Response(200, json=[{"key": "JQA-R1", "name": "Run", "projectKey": "JQA"}])
     )
     respx.get(f"{BASE_URL}{API}/testrun/JQA-R1/testresults").mock(
-        return_value=httpx.Response(200, json=[{"id": 7, "testCaseKey": "JQA-T1", "projectKey": "JQA", "status": "Pass"}])
+        return_value=httpx.Response(
+            200, json=[{"id": 7, "testCaseKey": "JQA-T1", "projectKey": "JQA", "status": "Pass"}]
+        )
     )
     client = _client()
 
@@ -110,7 +112,9 @@ def test_testrun_and_results_operations() -> None:
 def test_testresult_create_and_latest() -> None:
     respx.post(f"{BASE_URL}{API}/testresult").mock(return_value=httpx.Response(201, json={"id": 42}))
     respx.get(f"{BASE_URL}{API}/testcase/JQA-T1/testresult/latest").mock(
-        return_value=httpx.Response(200, json={"id": 42, "testCaseKey": "JQA-T1", "projectKey": "JQA", "status": "Pass"})
+        return_value=httpx.Response(
+            200, json={"id": 42, "testCaseKey": "JQA-T1", "projectKey": "JQA", "status": "Pass"}
+        )
     )
     client = _client()
 

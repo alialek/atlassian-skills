@@ -20,6 +20,26 @@ use the same commands — on Windows they run identically in PowerShell, cmd, or
 
 ---
 
+## [Unreleased]
+
+### Changed
+- **Russian Jira+Zephyr fork by default** — this fork serves a Russian-speaking Jira+Zephyr team,
+  so the generated skill is rendered for those products in Russian, consistently across all three
+  surfaces (frontmatter triggers, body, and the injected `CLAUDE.md` / `AGENTS.md` /
+  `copilot-instructions.md` routing blocks). One product scope drives everything:
+  - `skill_products` config key defaults to `["jira", "zephyr"]`. A bare `atls setup` therefore
+    installs a Jira+Zephyr skill with no Confluence/Bitbucket sections and a routing block that
+    advertises only those products — cutting the skill's standing token cost in the agent's context.
+  - `atls setup --products jira,zephyr,confluence` (or `--products all`) overrides and persists the
+    scope so it survives `atls upgrade`. `all` is stored as the explicit full product list.
+  - Trigger terms are Russian (Jira/Джира/Жира, Zephyr/Зефир, …) plus generic dev terms
+    (задача, тикет, баг, спринт, эпик, тесткейс, тест-ран). The previously hardcoded Korean terms
+    are gone.
+  - The canonical `SKILL.md` carries `<!-- atls:product:<name>:start/end -->` markers (now in the
+    frontmatter trigger list too); install-time rendering strips the markers and any unselected
+    product regions, so the installed file never contains marker comments and keeping every product
+    reproduces the marker-free file byte-for-byte.
+
 ## [0.2.8] - 2026-05-29
 
 ### Added

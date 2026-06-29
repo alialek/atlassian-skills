@@ -106,11 +106,15 @@ def _render_model(model: BaseModel, fmt: OutputFormat) -> str:
 
 def _render_models(models: Sequence[BaseModel], fmt: OutputFormat) -> str:
     if fmt == OutputFormat.COMPACT:
-        return format_output([m.to_compact_dict() if hasattr(m, "to_compact_dict") else m.model_dump() for m in models], fmt)
+        return format_output(
+            [m.to_compact_dict() if hasattr(m, "to_compact_dict") else m.model_dump() for m in models], fmt
+        )
     return format_output([m.model_dump() for m in models], fmt)
 
 
-def _write_result(action: str, key: str, fmt: OutputFormat, *, summary: str | None = None, id: str | None = None) -> None:
+def _write_result(
+    action: str, key: str, fmt: OutputFormat, *, summary: str | None = None, id: str | None = None
+) -> None:
     typer.echo(format_output(WriteResult(action=action, key=key, summary=summary, id=id), fmt))
 
 
@@ -230,7 +234,11 @@ def testcase_latest_result(
     fmt = _resolve_fmt(ctx.obj, format)
     try:
         result = _make_client(ctx.obj).get_testcase_latest_result(key)
-        typer.echo(format_output(None if result is None else result.to_compact_dict(), fmt) if fmt == OutputFormat.COMPACT else format_output(None if result is None else result.model_dump(), fmt))
+        typer.echo(
+            format_output(None if result is None else result.to_compact_dict(), fmt)
+            if fmt == OutputFormat.COMPACT
+            else format_output(None if result is None else result.model_dump(), fmt)
+        )
     except AtlasError as e:
         _handle_error(e, fmt)
 
@@ -268,10 +276,19 @@ def testcase_add_step(
         client = _make_client(ctx.obj)
         request = TestStepRequest(step=step, data=data, result=result)
         if dry_run:
-            typer.echo(format_dry_run("PUT", f"{client.base_url}{client.API}/testcase/{issue_id}", body=request.model_dump(), fmt=fmt.value))
+            typer.echo(
+                format_dry_run(
+                    "PUT",
+                    f"{client.base_url}{client.API}/testcase/{issue_id}",
+                    body=request.model_dump(),
+                    fmt=fmt.value,
+                )
+            )
             return
         created = client.add_test_step(issue_id, project_id, request)
-        typer.echo(format_output(created.to_compact_dict() if fmt == OutputFormat.COMPACT else created.model_dump(), fmt))
+        typer.echo(
+            format_output(created.to_compact_dict() if fmt == OutputFormat.COMPACT else created.model_dump(), fmt)
+        )
     except AtlasError as e:
         _handle_error(e, fmt)
 
@@ -292,10 +309,16 @@ def testcase_add_steps(
         requests = [TestStepRequest.model_validate(item) for item in data]
         client = _make_client(ctx.obj)
         if dry_run:
-            typer.echo(format_dry_run("PUT", f"{client.base_url}{client.API}/testcase/{issue_id}", body=data, fmt=fmt.value))
+            typer.echo(
+                format_dry_run("PUT", f"{client.base_url}{client.API}/testcase/{issue_id}", body=data, fmt=fmt.value)
+            )
             return
         created = client.add_multiple_test_steps(issue_id, project_id, requests)
-        typer.echo(format_output([step.to_compact_dict() if fmt == OutputFormat.COMPACT else step.model_dump() for step in created], fmt))
+        typer.echo(
+            format_output(
+                [step.to_compact_dict() if fmt == OutputFormat.COMPACT else step.model_dump() for step in created], fmt
+            )
+        )
     except AtlasError as e:
         _handle_error(e, fmt)
 
@@ -573,7 +596,9 @@ def environment_create(
             typer.echo(format_dry_run("POST", f"{client.base_url}{client.API}/environment", body=data, fmt=fmt.value))
             return
         env_id = client.create_environment(data)
-        _write_result("created", str(data.get("projectKey", "")), fmt, id=str(env_id), summary=str(data.get("name", "")))
+        _write_result(
+            "created", str(data.get("projectKey", "")), fmt, id=str(env_id), summary=str(data.get("name", ""))
+        )
     except AtlasError as e:
         _handle_error(e, fmt)
 

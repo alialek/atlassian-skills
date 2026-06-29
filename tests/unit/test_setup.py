@@ -7,14 +7,21 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from atlassian_skills.cli.setup import (
+    _CANONICAL_SKILL_DIR,
     _claude_md_block,
+    _configured_skill_products,
     _inject_claude_md_block,
     _inject_codex_agents_block,
     _inject_copilot_instructions_block,
     _install,
+    _parse_products_option,
+    _persist_skill_products,
+    _scope_skill_md,
+    _trigger_terms,
 )
 
 # ---------------------------------------------------------------------------
@@ -459,6 +466,25 @@ class TestWizardURLs:
         assert prof.bitbucket_url is None
         assert prof.zephyr_url is None
 
+    def test_add_zephyr_only(self, wizard_env: Path) -> None:
+        from atlassian_skills.cli.main import app
+        from atlassian_skills.core.config import load_config
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["setup"],
+            input=_wizard_input(zephyr=("a", "https://jira.example.com", "t-zephyr")),
+        )
+
+        assert result.exit_code == 0, result.output
+        prof = load_config().profiles.get("default")
+        assert prof is not None
+        assert prof.jira_url is None
+        assert prof.confluence_url is None
+        assert prof.bitbucket_url is None
+        assert prof.zephyr_url == "https://jira.example.com"
+
     def test_keep_all_when_pressing_enter(self, wizard_env: Path) -> None:
         """Pure-Enter run with seeded URLs must be non-destructive."""
         from atlassian_skills.cli.main import app
@@ -795,9 +821,7 @@ class TestGigaCodeInstall:
         assert result.exit_code == 0
         assert not (tmp_path / ".gigacode" / "skills" / "atls" / "SKILL.md").exists()
 
-    def test_skills_only_refreshes_gigacode_when_present(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_skills_only_refreshes_gigacode_when_present(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import atlassian_skills.cli.setup as setup_mod
 
         asset_root = _make_asset_root(tmp_path)
@@ -1122,3 +1146,265 @@ class TestWizardMenuDefault:
 
         assert result.exit_code == 0, result.output
         assert "[s]kip / [e]dit / [r]emove [default=s]" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Product scoping — _scope_skill_md / _parse_products_option / --products
+# ---------------------------------------------------------------------------
+
+_ALL_PRODUCTS = ("jira", "confluence", "bitbucket", "zephyr")
+
+
+class TestCanonicalSkillMarkers:
+    """The canonical asset must carry balanced product markers, else scoping is a silent no-op."""
+
+    def test_canonical_has_balanced_markers(self) -> None:
+        content = (_CANONICAL_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+        for product in _ALL_PRODUCTS:
+            starts = content.count(f"<!-- atls:product:{product}:start -->")
+            ends = content.count(f"<!-- atls:product:{product}:end -->")
+            assert starts == ends, f"{product}: {starts} start vs {ends} end markers"
+            assert starts >= 1, f"{product}: expected at least one marked region"
+
+
+class TestScopeSkillMd:
+    def _canonical(self) -> str:
+        return (_CANONICAL_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+
+    def test_none_strips_all_markers_keeps_everything(self) -> None:
+        scoped = _scope_skill_md(self._canonical(), None)
+        assert "atls:product:" not in scoped
+        assert "atls jira issue get KEY" in scoped
+        assert "atls confluence page get ID" in scoped
+        assert "bitbucket" in scoped
+        assert "atls zephyr testcase get KEY" in scoped
+
+    def test_none_is_byte_identical_to_unmarked_original(self) -> None:
+        """Default install must reproduce the pre-marker file exactly — no churn for existing users."""
+        canonical = self._canonical()
+        # Independently derive the expected text by dropping whole marker lines.
+        expected = "".join(line for line in canonical.splitlines(keepends=True) if "atls:product:" not in line)
+        assert _scope_skill_md(canonical, None) == expected
+
+    def test_subset_drops_other_products(self) -> None:
+        full = _scope_skill_md(self._canonical(), None)
+        scoped = _scope_skill_md(self._canonical(), ["jira", "zephyr"])
+        assert "atls:product:" not in scoped
+        # Kept
+        assert "atls jira issue get KEY" in scoped
+        assert "atls zephyr testcase get KEY" in scoped
+        # Dropped Confluence / Bitbucket regions
+        assert "## page update vs push-md" not in scoped
+        assert "atls confluence page push-md" not in scoped
+        assert "├── bitbucket" not in scoped and "└── bitbucket" not in scoped
+        assert len(scoped) < len(full)
+
+    def test_single_product_drops_the_rest(self) -> None:
+        scoped = _scope_skill_md(self._canonical(), ["jira"])
+        assert "atls zephyr" not in scoped
+        assert "atls confluence page" not in scoped
+        assert "atls jira issue get KEY" in scoped
+
+    def test_no_orphan_blank_runs(self) -> None:
+        assert "\n\n\n" not in _scope_skill_md(self._canonical(), ["jira"])
+
+
+class TestParseProductsOption:
+    def test_list(self) -> None:
+        assert _parse_products_option("jira,zephyr") == ["jira", "zephyr"]
+
+    def test_canonical_order_and_dedup(self) -> None:
+        assert _parse_products_option("zephyr,jira,jira") == ["jira", "zephyr"]
+
+    def test_whitespace_and_case(self) -> None:
+        assert _parse_products_option(" Jira , ZEPHYR ") == ["jira", "zephyr"]
+
+    def test_all_expands_to_full_list(self) -> None:
+        # 'all' is stored as the explicit full list (None would be dropped by exclude_none on save).
+        assert _parse_products_option("all") == ["jira", "confluence", "bitbucket", "zephyr"]
+
+    def test_empty_expands_to_full_list(self) -> None:
+        assert _parse_products_option("") == ["jira", "confluence", "bitbucket", "zephyr"]
+
+    def test_unknown_raises(self) -> None:
+        with pytest.raises(typer.BadParameter):
+            _parse_products_option("jira,wiki")
+
+
+class TestInstallTransform:
+    def test_transform_applied_before_write(self, tmp_path: Path) -> None:
+        source = tmp_path / "SKILL.md"
+        source.write_text(
+            "KEEP\n<!-- atls:product:confluence:start -->\nDROP\n<!-- atls:product:confluence:end -->\n",
+            encoding="utf-8",
+        )
+        target = tmp_path / "out" / "SKILL.md"
+        _install(source, target, transform=lambda c: _scope_skill_md(c, ["jira"]))
+        out = target.read_text(encoding="utf-8")
+        assert "KEEP" in out
+        assert "DROP" not in out
+        assert "atls:product:" not in out
+
+
+class TestSkillProductsPersistence:
+    def test_persist_and_read_roundtrip(self, wizard_env: Path) -> None:
+        assert _configured_skill_products() == ["jira", "zephyr"]  # this fork's default
+        _persist_skill_products(["jira"])
+        assert _configured_skill_products() == ["jira"]
+        assert "skill_products" in (wizard_env / "config.toml").read_text(encoding="utf-8")
+        # 'all' persists as the explicit full list and survives the round-trip (not dropped on save).
+        _persist_skill_products(["jira", "confluence", "bitbucket", "zephyr"])
+        assert _configured_skill_products() == ["jira", "confluence", "bitbucket", "zephyr"]
+
+
+def _marked_asset_root(tmp_path: Path) -> Path:
+    asset_root = tmp_path / "assets"
+    skill_dir = asset_root / "skills" / "atls"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "# atls\n"
+        "<!-- atls:product:jira:start -->\nJIRA SECTION\n<!-- atls:product:jira:end -->\n"
+        "<!-- atls:product:confluence:start -->\nCONFLUENCE SECTION\n<!-- atls:product:confluence:end -->\n",
+        encoding="utf-8",
+    )
+    return asset_root
+
+
+class TestSkillsOnlyProductsScoping:
+    def test_skills_only_respects_persisted_scope(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import atlassian_skills.cli.setup as setup_mod
+        import atlassian_skills.core.config as config_mod
+
+        asset_root = _marked_asset_root(tmp_path)
+        _stub_paths(monkeypatch, tmp_path, asset_root)
+        monkeypatch.setattr(config_mod, "config_path", lambda: tmp_path / "config.toml")
+        _persist_skill_products(["jira"])
+
+        result = CliRunner().invoke(setup_mod.setup_app, ["--skills-only"])
+        assert result.exit_code == 0, result.output
+
+        installed = (tmp_path / ".claude" / "skills" / "atls" / "SKILL.md").read_text(encoding="utf-8")
+        assert "JIRA SECTION" in installed
+        assert "CONFLUENCE SECTION" not in installed
+        assert "atls:product:" not in installed
+
+    def test_products_flag_persists_and_scopes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import atlassian_skills.cli.setup as setup_mod
+        import atlassian_skills.core.config as config_mod
+
+        asset_root = _marked_asset_root(tmp_path)
+        _stub_paths(monkeypatch, tmp_path, asset_root)
+        monkeypatch.setattr(config_mod, "config_path", lambda: tmp_path / "config.toml")
+
+        result = CliRunner().invoke(setup_mod.setup_app, ["--skills-only", "--products", "jira"])
+        assert result.exit_code == 0, result.output
+
+        installed = (tmp_path / ".claude" / "skills" / "atls" / "SKILL.md").read_text(encoding="utf-8")
+        assert "CONFLUENCE SECTION" not in installed
+        # Persisted so the next bare `atls upgrade` keeps the scope.
+        assert _configured_skill_products() == ["jira"]
+
+    def test_default_install_is_jira_zephyr_scoped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A bare `atls setup --skills-only` defaults to this fork's Jira+Zephyr scope."""
+        import atlassian_skills.cli.setup as setup_mod
+        import atlassian_skills.core.config as config_mod
+
+        asset_root = _marked_asset_root(tmp_path)
+        _stub_paths(monkeypatch, tmp_path, asset_root)
+        monkeypatch.setattr(config_mod, "config_path", lambda: tmp_path / "config.toml")
+
+        result = CliRunner().invoke(setup_mod.setup_app, ["--skills-only"])
+        assert result.exit_code == 0, result.output
+
+        installed = (tmp_path / ".claude" / "skills" / "atls" / "SKILL.md").read_text(encoding="utf-8")
+        assert "JIRA SECTION" in installed
+        assert "CONFLUENCE SECTION" not in installed  # default scope drops Confluence
+        assert "atls:product:" not in installed
+        # The injected routing block is scoped to the same products, in Russian.
+        routing = (tmp_path / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
+        assert "Жира" in routing and "Зефир" in routing
+        assert "Confluence" not in routing and "Битбакет" not in routing
+        assert "지라" not in routing
+
+    def test_products_all_keeps_everything(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import atlassian_skills.cli.setup as setup_mod
+        import atlassian_skills.core.config as config_mod
+
+        asset_root = _marked_asset_root(tmp_path)
+        _stub_paths(monkeypatch, tmp_path, asset_root)
+        monkeypatch.setattr(config_mod, "config_path", lambda: tmp_path / "config.toml")
+
+        result = CliRunner().invoke(setup_mod.setup_app, ["--skills-only", "--products", "all"])
+        assert result.exit_code == 0, result.output
+
+        installed = (tmp_path / ".claude" / "skills" / "atls" / "SKILL.md").read_text(encoding="utf-8")
+        assert "JIRA SECTION" in installed
+        assert "CONFLUENCE SECTION" in installed
+        # 'all' persisted as the full list so the next bare upgrade keeps everything.
+        assert _configured_skill_products() == ["jira", "confluence", "bitbucket", "zephyr"]
+
+
+class TestTriggerTerms:
+    def test_jira_zephyr(self) -> None:
+        assert (
+            _trigger_terms(["jira", "zephyr"])
+            == "Jira/Джира/Жира/JQL/PROJ-123/задача/тикет/баг/спринт/эпик/Zephyr/Зефир/тесткейс/тест-ран"
+        )
+
+    def test_none_is_all(self) -> None:
+        terms = _trigger_terms(None)
+        assert "Конфлюенс" in terms and "CQL" in terms
+        assert "Битбакет" in terms and "репозиторий" in terms
+
+    def test_no_korean(self) -> None:
+        assert "지라" not in _trigger_terms(None)
+
+
+class TestCanonicalFrontmatterScoping:
+    """The always-loaded frontmatter triggers must scope with --products and carry no Korean."""
+
+    def _canonical(self) -> str:
+        return (_CANONICAL_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+
+    def test_frontmatter_carries_product_markers(self) -> None:
+        frontmatter = self._canonical().split("---", 2)[1]
+        assert "atls:product:confluence:start" in frontmatter
+
+    def test_default_scope_frontmatter_is_russian_jira_zephyr_only(self) -> None:
+        frontmatter = _scope_skill_md(self._canonical(), ["jira", "zephyr"]).split("---", 2)[1]
+        assert "Джира" in frontmatter and "тикет" in frontmatter
+        assert "Зефир" in frontmatter and "тесткейс" in frontmatter
+        for term in ("Confluence", "Конфлюенс", "CQL", "Bitbucket", "Битбакет", "지라"):
+            assert term not in frontmatter
+
+    def test_jira_only_frontmatter_does_not_advertise_zephyr_or_confluence_terms(self) -> None:
+        frontmatter = _scope_skill_md(self._canonical(), ["jira"]).split("---", 2)[1]
+        assert "JQL" in frontmatter and "тикет" in frontmatter
+        for term in ("CQL", "тесткейс", "тест-ран", "Zephyr", "Зефир"):
+            assert term not in frontmatter
+
+    def test_no_korean_anywhere_in_default_scope(self) -> None:
+        scoped = _scope_skill_md(self._canonical(), ["jira", "zephyr"])
+        for korean in ("지라", "컨플루언스", "비트버킷", "지파이어", "아틀라시안"):
+            assert korean not in scoped
+
+    def test_frontmatter_and_routing_share_product_triggers(self) -> None:
+        products = ["jira", "zephyr"]
+        frontmatter = _scope_skill_md(self._canonical(), products).split("---", 2)[1]
+        for term in _trigger_terms(products).split("/"):
+            assert term in frontmatter
+
+
+class TestRoutingBlockScoping:
+    def test_scoped_block_is_russian_jira_zephyr(self) -> None:
+        block = _claude_md_block(["jira", "zephyr"])
+        assert "Jira/Джира/Жира/JQL/PROJ-123/задача/тикет/баг/спринт/эпик" in block
+        assert "Zephyr/Зефир/тесткейс/тест-ран" in block
+        assert "Confluence" not in block and "Битбакет" not in block
+        assert "CQL" not in block
+        assert "지라" not in block
+
+    def test_full_block_lists_all_products(self) -> None:
+        block = _claude_md_block(["jira", "confluence", "bitbucket", "zephyr"])
+        assert "Конфлюенс" in block and "CQL" in block
+        assert "Битбакет" in block and "репозиторий" in block
