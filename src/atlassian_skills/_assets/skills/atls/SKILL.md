@@ -1,14 +1,24 @@
 ---
 name: atls
 description: |
-  ALL Atlassian work — Jira, Confluence, Bitbucket, Zephyr on Server/DC
-  (지라/컨플루언스/비트버킷/지파이어). Load BEFORE the first atls command.
+  Работа с Atlassian на Server/DC через atls. Load BEFORE the first atls command.
 
   Without this body, you WILL guess atls conventions wrong:
   JQL/CQL is positional, use --format=json not -f json, exit 5=stale.
 
-  TRIGGER: Jira, Confluence, Bitbucket, Zephyr, atls, JQL, CQL, PROJ-123,
-  지라, 컨플루언스, 비트버킷, 아틀라시안.
+  TRIGGER: atls, JQL, CQL, PROJ-123, задача, тикет, баг, спринт, эпик, тесткейс, тест-ран,
+  <!-- atls:product:jira:start -->
+  Jira, Джира, Жира,
+  <!-- atls:product:jira:end -->
+  <!-- atls:product:confluence:start -->
+  Confluence, Конфлюенс,
+  <!-- atls:product:confluence:end -->
+  <!-- atls:product:bitbucket:start -->
+  Bitbucket, Битбакет,
+  <!-- atls:product:bitbucket:end -->
+  <!-- atls:product:zephyr:start -->
+  Zephyr, Зефир.
+  <!-- atls:product:zephyr:end -->
 ---
 
 # atls
@@ -137,7 +147,7 @@ atls zephyr testresult create --data-json '{"testCaseKey":"PROJ-T1","status":"Pa
 | `--md-file -` | push-md | Read markdown from stdin |
 <!-- atls:product:confluence:end -->
 | `--body-repr md\|raw\|wiki` | issue get | Control body representation (separate from `--format`) |
-| `--body-format md` / `--comment-format md` | jira/confluence writes | md → server format |
+| `--body-format md` / `--comment-format md` | issue/comment writes | md → server format |
 | `--heading-promotion jira` | issue update, issue get, issue search | Heading level adjust for md↔wiki |
 | `--section "H2 Title"` | issue get, issue search | Extract specific H2 section from body |
 
@@ -177,5 +187,5 @@ atls --profile corp jira issue get CORP-1
 
 # Env vars
 export ATLS_CORP_JIRA_TOKEN="pat-token-here"
-export ATLS_CORP_CONFLUENCE_TOKEN="pat-token-here"
+export ATLS_CORP_ZEPHYR_TOKEN="pat-token-here"
 ```

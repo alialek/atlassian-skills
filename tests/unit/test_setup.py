@@ -21,6 +21,7 @@ from atlassian_skills.cli.setup import (
     _parse_products_option,
     _persist_skill_products,
     _scope_skill_md,
+    _trigger_terms,
 )
 
 # ---------------------------------------------------------------------------
@@ -1199,11 +1200,12 @@ class TestParseProductsOption:
     def test_whitespace_and_case(self) -> None:
         assert _parse_products_option(" Jira , ZEPHYR ") == ["jira", "zephyr"]
 
-    def test_all_means_full_skill(self) -> None:
-        assert _parse_products_option("all") is None
+    def test_all_expands_to_full_list(self) -> None:
+        # 'all' is stored as the explicit full list (None would be dropped by exclude_none on save).
+        assert _parse_products_option("all") == ["jira", "confluence", "bitbucket", "zephyr"]
 
-    def test_empty_means_full_skill(self) -> None:
-        assert _parse_products_option("") is None
+    def test_empty_expands_to_full_list(self) -> None:
+        assert _parse_products_option("") == ["jira", "confluence", "bitbucket", "zephyr"]
 
     def test_unknown_raises(self) -> None:
         with pytest.raises(typer.BadParameter):
@@ -1227,12 +1229,13 @@ class TestInstallTransform:
 
 class TestSkillProductsPersistence:
     def test_persist_and_read_roundtrip(self, wizard_env: Path) -> None:
-        assert _configured_skill_products() is None  # default = full skill
-        _persist_skill_products(["jira", "zephyr"])
-        assert _configured_skill_products() == ["jira", "zephyr"]
+        assert _configured_skill_products() == ["jira", "zephyr"]  # this fork's default
+        _persist_skill_products(["jira"])
+        assert _configured_skill_products() == ["jira"]
         assert "skill_products" in (wizard_env / "config.toml").read_text(encoding="utf-8")
-        _persist_skill_products(None)  # 'all' clears the scope
-        assert _configured_skill_products() is None
+        # 'all' persists as the explicit full list and survives the round-trip (not dropped on save).
+        _persist_skill_products(["jira", "confluence", "bitbucket", "zephyr"])
+        assert _configured_skill_products() == ["jira", "confluence", "bitbucket", "zephyr"]
 
 
 def _marked_asset_root(tmp_path: Path) -> Path:
@@ -1282,7 +1285,8 @@ class TestSkillsOnlyProductsScoping:
         # Persisted so the next bare `atls upgrade` keeps the scope.
         assert _configured_skill_products() == ["jira"]
 
-    def test_default_install_is_full_skill(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_default_install_is_jira_zephyr_scoped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A bare `atls setup --skills-only` defaults to this fork's Jira+Zephyr scope."""
         import atlassian_skills.cli.setup as setup_mod
         import atlassian_skills.core.config as config_mod
 
@@ -1295,5 +1299,73 @@ class TestSkillsOnlyProductsScoping:
 
         installed = (tmp_path / ".claude" / "skills" / "atls" / "SKILL.md").read_text(encoding="utf-8")
         assert "JIRA SECTION" in installed
-        assert "CONFLUENCE SECTION" in installed
+        assert "CONFLUENCE SECTION" not in installed  # default scope drops Confluence
         assert "atls:product:" not in installed
+        # The injected routing block is scoped to the same products, in Russian.
+        routing = (tmp_path / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
+        assert "Жира" in routing and "Зефир" in routing
+        assert "Confluence" not in routing and "Битбакет" not in routing
+        assert "지라" not in routing
+
+    def test_products_all_keeps_everything(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import atlassian_skills.cli.setup as setup_mod
+        import atlassian_skills.core.config as config_mod
+
+        asset_root = _marked_asset_root(tmp_path)
+        _stub_paths(monkeypatch, tmp_path, asset_root)
+        monkeypatch.setattr(config_mod, "config_path", lambda: tmp_path / "config.toml")
+
+        result = CliRunner().invoke(setup_mod.setup_app, ["--skills-only", "--products", "all"])
+        assert result.exit_code == 0, result.output
+
+        installed = (tmp_path / ".claude" / "skills" / "atls" / "SKILL.md").read_text(encoding="utf-8")
+        assert "JIRA SECTION" in installed
+        assert "CONFLUENCE SECTION" in installed
+        # 'all' persisted as the full list so the next bare upgrade keeps everything.
+        assert _configured_skill_products() == ["jira", "confluence", "bitbucket", "zephyr"]
+
+
+class TestTriggerTerms:
+    def test_jira_zephyr(self) -> None:
+        assert _trigger_terms(["jira", "zephyr"]) == "Jira/Джира/Жира/Zephyr/Зефир"
+
+    def test_none_is_all(self) -> None:
+        terms = _trigger_terms(None)
+        assert "Конфлюенс" in terms and "Битбакет" in terms
+
+    def test_no_korean(self) -> None:
+        assert "지라" not in _trigger_terms(None)
+
+
+class TestCanonicalFrontmatterScoping:
+    """The always-loaded frontmatter triggers must scope with --products and carry no Korean."""
+
+    def _canonical(self) -> str:
+        return (_CANONICAL_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+
+    def test_frontmatter_carries_product_markers(self) -> None:
+        frontmatter = self._canonical().split("---", 2)[1]
+        assert "atls:product:confluence:start" in frontmatter
+
+    def test_default_scope_frontmatter_is_russian_jira_zephyr_only(self) -> None:
+        frontmatter = _scope_skill_md(self._canonical(), ["jira", "zephyr"]).split("---", 2)[1]
+        assert "Джира" in frontmatter and "Зефир" in frontmatter
+        for term in ("Confluence", "Конфлюенс", "Bitbucket", "Битбакет", "지라"):
+            assert term not in frontmatter
+
+    def test_no_korean_anywhere_in_default_scope(self) -> None:
+        scoped = _scope_skill_md(self._canonical(), ["jira", "zephyr"])
+        for korean in ("지라", "컨플루언스", "비트버킷", "지파이어", "아틀라시안"):
+            assert korean not in scoped
+
+
+class TestRoutingBlockScoping:
+    def test_scoped_block_is_russian_jira_zephyr(self) -> None:
+        block = _claude_md_block(["jira", "zephyr"])
+        assert "Jira/Джира/Жира/Zephyr/Зефир" in block
+        assert "Confluence" not in block and "Битбакет" not in block
+        assert "지라" not in block
+
+    def test_full_block_lists_all_products(self) -> None:
+        block = _claude_md_block(["jira", "confluence", "bitbucket", "zephyr"])
+        assert "Конфлюенс" in block and "Битбакет" in block

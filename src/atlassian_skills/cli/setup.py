@@ -47,40 +47,43 @@ def _get_version() -> str:
         return "0.1.0"
 
 
-def _claude_md_block() -> str:
-    """Generate the ATLS block to inject into CLAUDE.md."""
+def _claude_md_block(products: list[str] | None = None) -> str:
+    """Generate the ATLS block to inject into CLAUDE.md (scoped to `products`)."""
     ver = _get_version()
+    terms = _trigger_terms(products)
     return f"""{_ATLS_CLAUDE_BLOCK_START}
 <!-- ATLS:VERSION:{ver} -->
 ## Atlassian (atls)
-- Atlassian work (Jira/Confluence/Bitbucket/Zephyr/지라/컨플루언스/비트버킷/지파이어) → load the `atls` skill BEFORE the first atls command.
+- Atlassian work ({terms}) → load the `atls` skill BEFORE the first atls command.
 - This file only routes. Do NOT infer atls flags or syntax from here — the skill is the single source of truth.
 {_ATLS_CLAUDE_BLOCK_END}"""
 
 
-def _codex_agents_block() -> str:
-    """Generate the ATLS block to inject into Codex AGENTS.md."""
+def _codex_agents_block(products: list[str] | None = None) -> str:
+    """Generate the ATLS block to inject into Codex AGENTS.md (scoped to `products`)."""
     ver = _get_version()
+    terms = _trigger_terms(products)
     return f"""{_ATLS_CODEX_BLOCK_START}
 <!-- ATLS:VERSION:{ver} -->
 ## Atlassian via atls
-- Atlassian work (Jira/Confluence/Bitbucket/Zephyr/지라/컨플루언스/비트버킷/지파이어) → load the `$atls` skill BEFORE the first atls command.
+- Atlassian work ({terms}) → load the `$atls` skill BEFORE the first atls command.
 - This file only routes. Do NOT infer atls flags or syntax from here — the skill is the single source of truth.
 {_ATLS_CODEX_BLOCK_END}"""
 
 
-def _copilot_instructions_block() -> str:
-    """Generate the ATLS block to inject into Copilot's copilot-instructions.md.
+def _copilot_instructions_block(products: list[str] | None = None) -> str:
+    """Generate the ATLS block to inject into Copilot's copilot-instructions.md (scoped to `products`).
 
     Copilot CLI does not have a magic skill-loader directive like Codex's `$atls` —
     it reads `copilot-instructions.md` as plain global guidance. The text below tells
     Copilot to defer to the SKILL.md content rather than fabricate atls syntax.
     """
     ver = _get_version()
+    terms = _trigger_terms(products)
     return f"""{_ATLS_COPILOT_BLOCK_START}
 <!-- ATLS:VERSION:{ver} -->
 ## Atlassian via atls
-- Atlassian work (Jira/Confluence/Bitbucket/Zephyr/지라/컨플루언스/비트버킷/지파이어) → read the `atls` skill at `~/.copilot/skills/atls/SKILL.md` BEFORE the first atls command.
+- Atlassian work ({terms}) → read the `atls` skill at `~/.copilot/skills/atls/SKILL.md` BEFORE the first atls command.
 - This file only routes. Do NOT infer atls flags or syntax from here — the skill is the single source of truth.
 {_ATLS_COPILOT_BLOCK_END}"""
 
@@ -315,35 +318,35 @@ def _inject_marked_block(*, path: Path, start_marker: str, end_marker: str, bloc
     return f"  {path}: {label} appended"
 
 
-def _inject_claude_md_block() -> str:
-    """Inject or replace the ATLS block in ~/.claude/CLAUDE.md."""
+def _inject_claude_md_block(products: list[str] | None = None) -> str:
+    """Inject or replace the ATLS block in ~/.claude/CLAUDE.md (scoped to `products`)."""
     return _inject_marked_block(
         path=_get_claude_md_path(),
         start_marker=_ATLS_CLAUDE_BLOCK_START,
         end_marker=_ATLS_CLAUDE_BLOCK_END,
-        block=_claude_md_block(),
+        block=_claude_md_block(products),
         label="ATLS Claude block",
     )
 
 
-def _inject_codex_agents_block() -> str:
-    """Inject or replace the ATLS block in ~/.codex/AGENTS.md."""
+def _inject_codex_agents_block(products: list[str] | None = None) -> str:
+    """Inject or replace the ATLS block in ~/.codex/AGENTS.md (scoped to `products`)."""
     return _inject_marked_block(
         path=_get_codex_agents_path(),
         start_marker=_ATLS_CODEX_BLOCK_START,
         end_marker=_ATLS_CODEX_BLOCK_END,
-        block=_codex_agents_block(),
+        block=_codex_agents_block(products),
         label="ATLS Codex block",
     )
 
 
-def _inject_copilot_instructions_block() -> str:
-    """Inject or replace the ATLS block in ~/.copilot/copilot-instructions.md."""
+def _inject_copilot_instructions_block(products: list[str] | None = None) -> str:
+    """Inject or replace the ATLS block in ~/.copilot/copilot-instructions.md (scoped to `products`)."""
     return _inject_marked_block(
         path=_get_copilot_instructions_path(),
         start_marker=_ATLS_COPILOT_BLOCK_START,
         end_marker=_ATLS_COPILOT_BLOCK_END,
-        block=_copilot_instructions_block(),
+        block=_copilot_instructions_block(products),
         label="ATLS Copilot block",
     )
 
@@ -406,61 +409,85 @@ _CANONICAL_SKILL_DIR = ASSETS_DIR / "skills" / "atls"
 
 
 # ---------------------------------------------------------------------------
-# Product scoping — shrink SKILL.md to the products the user actually configured
+# Product scoping — render SKILL.md + routing blocks for the configured products
 # ---------------------------------------------------------------------------
+
+# Trigger aliases (English + Russian) per product, used for BOTH the SKILL.md frontmatter and the
+# injected routing blocks so they always advertise the same products. This fork is Russian-only by
+# design — there is no locale switch.
+_PRODUCT_TRIGGERS: dict[str, tuple[str, ...]] = {
+    "jira": ("Jira", "Джира", "Жира"),
+    "confluence": ("Confluence", "Конфлюенс"),
+    "bitbucket": ("Bitbucket", "Битбакет"),
+    "zephyr": ("Zephyr", "Зефир"),
+}
 
 
 def _scope_skill_md(content: str, products: list[str] | None) -> str:
-    """Filter product-marked regions out of a SKILL.md body.
+    """Filter product-marked regions out of the SKILL.md (frontmatter triggers AND body).
 
-    The canonical SKILL.md wraps each product's sections in standalone marker lines —
+    The canonical SKILL.md wraps each product's regions in standalone marker lines —
     `<!-- atls:product:<name>:start -->` … `<!-- atls:product:<name>:end -->`. For the kept
-    products (every product when `products is None`) the marker lines are stripped and the body
-    retained; for the rest, the whole region is removed. The installed skill therefore never
-    contains marker comments, and `products=None` reproduces the pre-marker file byte-for-byte.
+    products (every product when `products is None`) the marker lines are stripped and their
+    content retained; for the rest, the whole region is removed. Markers may be indented (the
+    frontmatter trigger list lives inside a YAML block scalar), so matching is whitespace-aware.
+    The installed skill never contains marker comments, and keeping every product reproduces the
+    marker-free file byte-for-byte.
     """
     keep = set(_PRODUCTS) if products is None else set(products)
     out = content
     for product in _PRODUCTS:
-        start = f"<!-- atls:product:{product}:start -->"
-        end = f"<!-- atls:product:{product}:end -->"
+        start = re.escape(f"<!-- atls:product:{product}:start -->")
+        end = re.escape(f"<!-- atls:product:{product}:end -->")
         if product in keep:
-            out = out.replace(start + "\n", "").replace(end + "\n", "")
+            # Drop just the marker lines (with any indentation), keep the wrapped content.
+            out = re.sub(rf"^[ \t]*{start}[ \t]*\n", "", out, flags=re.MULTILINE)
+            out = re.sub(rf"^[ \t]*{end}[ \t]*\n", "", out, flags=re.MULTILINE)
         else:
-            out = re.sub(
-                re.escape(start) + r"\n.*?" + re.escape(end) + r"\n",
-                "",
-                out,
-                flags=re.DOTALL,
-            )
+            out = re.sub(rf"^[ \t]*{start}[ \t]*\n.*?^[ \t]*{end}[ \t]*\n", "", out, flags=re.DOTALL | re.MULTILINE)
     # Collapse blank-line runs left behind by removed regions (the source never has >2).
     return re.sub(r"\n{3,}", "\n\n", out)
 
 
-def _parse_products_option(value: str) -> list[str] | None:
-    """Normalize a ``--products`` CLI value to a canonical product list, or None for 'all'.
+def _trigger_terms(products: list[str] | None) -> str:
+    """Slash-joined product trigger aliases for the kept products (None = all).
 
-    Accepts a comma-separated list of product names (``jira,confluence,bitbucket,zephyr``) or
-    the literal ``all``. Returns the products in canonical order with duplicates removed; ``all``
-    or an empty value yields ``None`` (= install the full skill). Raises on unknown names.
+    Used by the injected routing blocks so they advertise the same products the installed
+    SKILL.md actually contains.
+    """
+    keep = set(_PRODUCTS) if products is None else set(products)
+    terms: list[str] = []
+    for product in _PRODUCTS:
+        if product in keep:
+            terms.extend(_PRODUCT_TRIGGERS[product])
+    return "/".join(terms)
+
+
+def _parse_products_option(value: str) -> list[str]:
+    """Normalize a ``--products`` CLI value to a canonical product list.
+
+    Accepts a comma-separated list of product names (``jira,confluence,bitbucket,zephyr``) or the
+    literal ``all`` — which expands to the full product list (stored explicitly so it survives a
+    config round-trip; `None`/exclude_none would otherwise revert to the default). Returns the
+    products in canonical order with duplicates removed. Raises on unknown names.
     """
     items = [p.strip().lower() for p in value.split(",") if p.strip()]
     if not items or "all" in items:
-        return None
+        return list(_PRODUCTS)
     unknown = [p for p in items if p not in _PRODUCTS]
     if unknown:
         raise typer.BadParameter(f"unknown product(s): {', '.join(unknown)}. Valid: {', '.join(_PRODUCTS)}, all")
     return [p for p in _PRODUCTS if p in items]
 
 
-def _configured_skill_products() -> list[str] | None:
-    """Read the persisted `skill_products` scope from config (None = full skill)."""
+def _configured_skill_products() -> list[str]:
+    """Read the persisted `skill_products` scope from config (default: this fork's Jira+Zephyr)."""
     from atlassian_skills.core.config import load_config
 
     return load_config().skill_products
 
 
-def _persist_skill_products(products: list[str] | None) -> None:
+def _persist_skill_products(products: list[str]) -> None:
     """Persist the SKILL.md product scope so it survives `atls upgrade`."""
     from atlassian_skills.core.config import load_config, save_config
 
@@ -718,19 +745,19 @@ def _refresh_skills(
     msgs: list[str] = []
     if codex:
         msgs.extend(_install_tree(_CANONICAL_SKILL_DIR, _get_codex_skill_target().parent, transform=transform))
-        msgs.append(_inject_codex_agents_block())
+        msgs.append(_inject_codex_agents_block(products))
         legacy = _legacy_codex_skill_notice()
         if legacy:
             msgs.append(legacy)
     if claude:
         msgs.extend(_install_tree(_CANONICAL_SKILL_DIR, _get_claude_skill_target().parent, transform=transform))
-        msgs.append(_inject_claude_md_block())
+        msgs.append(_inject_claude_md_block(products))
         legacy = _legacy_claude_command_notice()
         if legacy:
             msgs.append(legacy)
     if copilot:
         msgs.extend(_install_tree(_CANONICAL_SKILL_DIR, _get_copilot_skill_target().parent, transform=transform))
-        msgs.append(_inject_copilot_instructions_block())
+        msgs.append(_inject_copilot_instructions_block(products))
     if gigacode:
         msgs.extend(_install_tree(_CANONICAL_SKILL_DIR, _get_gigacode_skill_target().parent, transform=transform))
     return msgs
