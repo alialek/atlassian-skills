@@ -43,7 +43,7 @@ atls
 │   ├── link         list-types, create, remote-list, remote-create, delete
 │   ├── worklog      list, add
 │   ├── watcher      list, add, remove
-│   ├── attachment   list, upload, download, delete
+│   ├── attachment   list, upload, download, download-all, delete
 │   ├── dev-info     get, get-many
 │   ├── service-desk list, queues, queue-issues
 │   ├── project      list, issues, versions, components, versions-create
@@ -103,6 +103,7 @@ atls jira comment add KEY --body-file=- --body-format=md
 atls jira issue transitions KEY --format=json
 atls jira issue transition KEY --transition-id 31
 atls jira issue transition KEY --transition-name "In Progress"
+atls jira attachment download-all KEY --output-dir ./attachments
 <!-- atls:product:jira:end -->
 
 <!-- atls:product:confluence:start -->

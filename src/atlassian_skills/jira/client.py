@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any
 
 from atlassian_skills.core.auth import Credential
@@ -21,6 +23,11 @@ from atlassian_skills.jira.models import (
     WatcherList,
     WorklogList,
 )
+
+
+def _safe_filename(filename: str, fallback_id: str) -> str:
+    safe = os.path.basename(filename).lstrip(".")
+    return safe or f"attachment_{fallback_id}"
 
 
 class JiraClient(BaseClient):
@@ -640,6 +647,62 @@ class JiraClient(BaseClient):
         data: dict[str, Any] = self.get(f"/rest/api/2/issue/{key}", params={"fields": "attachment"}).json()
         items: list[dict[str, Any]] = data.get("fields", {}).get("attachment", data.get("attachments", []))
         return [JiraAttachment.model_validate(a) for a in items]
+
+    def get_attachment(self, att_id: str) -> JiraAttachment:
+        """GET /rest/api/2/attachment/{id} — attachment metadata."""
+        data: dict[str, Any] = self.get(f"/rest/api/2/attachment/{att_id}").json()
+        return JiraAttachment.model_validate(data)
+
+    def download_attachment(
+        self,
+        att_id: str,
+        output_path: str | Path,
+        *,
+        content_url: str | None = None,
+        filename: str | None = None,
+    ) -> Path:
+        """Download one Jira attachment by id to a file or directory path."""
+        attachment = None
+        if not content_url or not filename:
+            attachment = self.get_attachment(att_id)
+            content_url = content_url or attachment.content
+            filename = filename or attachment.filename
+        if not content_url:
+            from atlassian_skills.core.errors import NotFoundError
+
+            raise NotFoundError(f"No download URL found for attachment {att_id}")
+
+        out = Path(output_path)
+        if out.exists() and out.is_dir():
+            out = out / _safe_filename(filename or f"attachment_{att_id}", att_id)
+        elif str(output_path).endswith(("/", os.sep)):
+            out.mkdir(parents=True, exist_ok=True)
+            out = out / _safe_filename(filename or f"attachment_{att_id}", att_id)
+
+        out.parent.mkdir(parents=True, exist_ok=True)
+        resp = self.get(content_url)
+        out.write_bytes(resp.content)
+        return out
+
+    def download_issue_attachments(self, key: str, output_dir: str | Path) -> list[Path]:
+        """Download all attachments from an issue to output_dir."""
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        paths: list[Path] = []
+        for attachment in self.get_attachment_content(key):
+            safe_name = _safe_filename(attachment.filename, attachment.id)
+            dest = out_dir / safe_name
+            if not dest.resolve().is_relative_to(out_dir.resolve()):
+                dest = out_dir / f"attachment_{attachment.id}"
+            paths.append(
+                self.download_attachment(
+                    attachment.id,
+                    dest,
+                    content_url=attachment.content,
+                    filename=attachment.filename,
+                )
+            )
+        return paths
 
     # ------------------------------------------------------------------
     # Service desk

@@ -268,6 +268,61 @@ def test_delete_attachment(client: JiraClient) -> None:
     client.delete_attachment("55")
 
 
+@respx.mock
+def test_download_attachment_by_id(client: JiraClient, tmp_path: Path) -> None:
+    respx.get(f"{BASE_URL}/rest/api/2/attachment/55").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "55",
+                "filename": "report.pdf",
+                "content": f"{BASE_URL}/secure/attachment/55/report.pdf",
+            },
+        )
+    )
+    respx.get(f"{BASE_URL}/secure/attachment/55/report.pdf").mock(
+        return_value=httpx.Response(200, content=b"pdf-bytes")
+    )
+
+    out = client.download_attachment("55", tmp_path)
+
+    assert out == tmp_path / "report.pdf"
+    assert out.read_bytes() == b"pdf-bytes"
+
+
+@respx.mock
+def test_download_issue_attachments(client: JiraClient, tmp_path: Path) -> None:
+    respx.get(f"{BASE_URL}/rest/api/2/issue/PROJ-3").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "fields": {
+                    "attachment": [
+                        {
+                            "id": "55",
+                            "filename": "one.txt",
+                            "content": f"{BASE_URL}/secure/attachment/55/one.txt",
+                        },
+                        {
+                            "id": "56",
+                            "filename": "two.txt",
+                            "content": f"{BASE_URL}/secure/attachment/56/two.txt",
+                        },
+                    ]
+                }
+            },
+        )
+    )
+    respx.get(f"{BASE_URL}/secure/attachment/55/one.txt").mock(return_value=httpx.Response(200, content=b"one"))
+    respx.get(f"{BASE_URL}/secure/attachment/56/two.txt").mock(return_value=httpx.Response(200, content=b"two"))
+
+    paths = client.download_issue_attachments("PROJ-3", tmp_path)
+
+    assert paths == [tmp_path / "one.txt", tmp_path / "two.txt"]
+    assert (tmp_path / "one.txt").read_bytes() == b"one"
+    assert (tmp_path / "two.txt").read_bytes() == b"two"
+
+
 # ---------------------------------------------------------------------------
 # remove_issue_link
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 import typer
@@ -150,6 +151,24 @@ def _parse_customfield_updates(values: list[str] | None) -> dict[str, str]:
             raise ValidationError(f"Invalid --set-customfield value: {pair!r}. Expected customfield_ID=value")
         updates[field_id] = value.strip()
     return updates
+
+
+_ISSUE_KEY_RE = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
+
+
+def _issue_key_arg(value: str) -> str:
+    """Accept either a Jira issue key or a browse URL and return the key."""
+    match = re.search(r"/browse/([A-Z][A-Z0-9_]+-\d+)(?:[/?#]|$)", value)
+    if match:
+        return match.group(1)
+    match = _ISSUE_KEY_RE.search(value)
+    if match:
+        return match.group(0)
+    return value
+
+
+def _is_issue_ref(value: str) -> bool:
+    return bool(_ISSUE_KEY_RE.search(value) or "/browse/" in value)
 
 
 def _customfield_value_matches(actual: Any, expected: str) -> bool:
@@ -720,7 +739,7 @@ def watcher_list(
 @attachment_app.command("list")
 def attachment_list(
     ctx: typer.Context,
-    key: str = typer.Argument(..., help="Issue key"),
+    key: str = typer.Argument(..., help="Issue key or browse URL"),
     format: str | None = typer.Option(None, "--format", help="Override output format (same as global atls --format)"),
 ) -> None:
     """List attachments for an issue."""
@@ -728,33 +747,91 @@ def attachment_list(
     fmt = _resolve_fmt(ctx.obj, format)
     try:
         client = _make_client(ctx.obj)
-        attachments = client.get_attachment_content(key)
+        attachments = client.get_attachment_content(_issue_key_arg(key))
         typer.echo(format_output(attachments, fmt), err=False)
     except AtlasError as e:
         _handle_error(e, fmt)
 
 
 # ---------------------------------------------------------------------------
-# attachment download <key> [--output-dir]
+# attachment download <attachment-id|key|url>
 # ---------------------------------------------------------------------------
 
 
 @attachment_app.command("download")
 def attachment_download(
     ctx: typer.Context,
-    key: str = typer.Argument(..., help="Issue key"),
-    output_dir: str = typer.Option(".", "--output-dir", "-o", help="Directory to save attachments"),
+    target: str = typer.Argument(..., help="Attachment ID, issue key, or browse URL"),
+    filename: str | None = typer.Option(None, "--filename", help="Attachment filename when target is an issue"),
+    attachment_id: str | None = typer.Option(None, "--attachment-id", help="Attachment ID when target is an issue"),
+    output: str = typer.Option(".", "--output", "-o", help="Output file or directory"),
     format: str | None = typer.Option(None, "--format", help="Override output format (same as global atls --format)"),
 ) -> None:
-    """Download attachments for an issue (not yet implemented — currently lists only)."""
+    """Download one attachment.
+
+    Pass an attachment ID directly, or pass an issue key / browse URL with
+    --filename or --attachment-id. If the issue has exactly one attachment, the
+    selector can be omitted.
+    """
     ctx.ensure_object(dict)
     fmt = _resolve_fmt(ctx.obj, format)
     try:
         client = _make_client(ctx.obj)
-        attachments = client.get_attachment_content(key)
-        typer.echo(format_output(attachments, fmt), err=False)
-        if not ctx.obj.get("quiet"):
-            typer.echo(f"# output-dir: {output_dir} (download not yet implemented)", err=True)
+        selected_id = attachment_id
+        selected_filename: str | None = None
+        selected_content: str | None = None
+
+        if _is_issue_ref(target) or filename or attachment_id:
+            issue_key = _issue_key_arg(target)
+            attachments = client.get_attachment_content(issue_key)
+            matches = attachments
+            if selected_id:
+                matches = [a for a in matches if a.id == selected_id]
+            if filename:
+                matches = [a for a in matches if a.filename == filename]
+            if not matches:
+                selector = selected_id or filename or "attachment"
+                raise ValidationError(f"No matching attachment found on issue {issue_key}: {selector}")
+            if len(matches) > 1:
+                names = ", ".join(f"{a.id}:{a.filename}" for a in matches)
+                raise ValidationError(
+                    f"Multiple attachments on issue {issue_key}; use --filename or --attachment-id. Found: {names}"
+                )
+            selected = matches[0]
+            selected_id = selected.id
+            selected_filename = selected.filename
+            selected_content = selected.content
+        else:
+            selected_id = target
+
+        path = client.download_attachment(
+            selected_id,
+            output,
+            content_url=selected_content,
+            filename=selected_filename,
+        )
+        if fmt == OutputFormat.COMPACT:
+            typer.echo(format_output(WriteResult(action="downloaded", key=str(path), id=selected_id), fmt))
+        else:
+            typer.echo(format_output({"path": str(path), "attachment_id": selected_id}, fmt))
+    except AtlasError as e:
+        _handle_error(e, fmt)
+
+
+@attachment_app.command("download-all")
+def attachment_download_all(
+    ctx: typer.Context,
+    key: str = typer.Argument(..., help="Issue key or browse URL"),
+    output_dir: str = typer.Option(".", "--output-dir", "-o", help="Directory to save attachments"),
+    format: str | None = typer.Option(None, "--format", help="Override output format (same as global atls --format)"),
+) -> None:
+    """Download all attachments for an issue."""
+    ctx.ensure_object(dict)
+    fmt = _resolve_fmt(ctx.obj, format)
+    try:
+        client = _make_client(ctx.obj)
+        paths = client.download_issue_attachments(_issue_key_arg(key), output_dir)
+        typer.echo(format_output([str(path) for path in paths], fmt))
     except AtlasError as e:
         _handle_error(e, fmt)
 
@@ -1466,7 +1543,7 @@ def project_versions_create(
 @attachment_app.command("upload")
 def attachment_upload(
     ctx: typer.Context,
-    key: str = typer.Argument(..., help="Issue key"),
+    key: str = typer.Argument(..., help="Issue key or browse URL"),
     file: str = typer.Argument(..., help="File path to upload"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be sent"),
     format: str | None = typer.Option(None, "--format", help="Override output format (same as global atls --format)"),
@@ -1476,24 +1553,25 @@ def attachment_upload(
     fmt = _resolve_fmt(ctx.obj, format)
     try:
         client = _make_client(ctx.obj)
+        issue_key = _issue_key_arg(key)
         if dry_run:
             typer.echo(
                 format_dry_run(
                     "POST",
-                    f"{client.base_url}/rest/api/2/issue/{key}/attachments",
+                    f"{client.base_url}/rest/api/2/issue/{issue_key}/attachments",
                     headers={"X-Atlassian-Token": "nocheck"},
                     body=f"[multipart: {file}]",
                 )
             )
             return
-        result = client.upload_attachment(key, file)
+        result = client.upload_attachment(issue_key, file)
         if fmt == OutputFormat.COMPACT:
             att_id = None
             if isinstance(result, list) and result:
                 att_id = str(result[0].get("id")) if isinstance(result[0], dict) else None
             elif isinstance(result, dict):
                 att_id = str(result.get("id")) if result.get("id") else None
-            typer.echo(format_output(WriteResult(action="uploaded", key=key, id=att_id, summary=file), fmt))
+            typer.echo(format_output(WriteResult(action="uploaded", key=issue_key, id=att_id, summary=file), fmt))
         else:
             typer.echo(format_output(result, fmt))
     except AtlasError as e:

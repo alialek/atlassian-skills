@@ -142,6 +142,101 @@ def test_cli_jira_projects_list() -> None:
     assert "TEST" in result.output
 
 
+@respx.mock
+def test_cli_jira_attachment_list_accepts_browse_url() -> None:
+    respx.get(f"{JIRA_URL}/rest/api/2/issue/HAR-157").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "fields": {
+                    "attachment": [
+                        {
+                            "id": "55",
+                            "filename": "report.pdf",
+                            "size": 7,
+                            "mimeType": "application/pdf",
+                            "content": f"{JIRA_URL}/secure/attachment/55/report.pdf",
+                        }
+                    ]
+                }
+            },
+        )
+    )
+
+    result = runner.invoke(
+        app,
+        ["jira", "attachment", "list", "https://dreamingoutloud.ru/browse/HAR-157"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "report.pdf" in result.output
+
+
+@respx.mock
+def test_cli_jira_attachment_download_single_from_browse_url(tmp_path: Path) -> None:
+    respx.get(f"{JIRA_URL}/rest/api/2/issue/HAR-157").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "fields": {
+                    "attachment": [
+                        {
+                            "id": "55",
+                            "filename": "report.pdf",
+                            "content": f"{JIRA_URL}/secure/attachment/55/report.pdf",
+                        }
+                    ]
+                }
+            },
+        )
+    )
+    respx.get(f"{JIRA_URL}/secure/attachment/55/report.pdf").mock(return_value=httpx.Response(200, content=b"pdf"))
+
+    result = runner.invoke(
+        app,
+        ["jira", "attachment", "download", "https://dreamingoutloud.ru/browse/HAR-157", "-o", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "report.pdf").read_bytes() == b"pdf"
+
+
+@respx.mock
+def test_cli_jira_attachment_download_all_from_browse_url(tmp_path: Path) -> None:
+    respx.get(f"{JIRA_URL}/rest/api/2/issue/HAR-157").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "fields": {
+                    "attachment": [
+                        {
+                            "id": "55",
+                            "filename": "one.txt",
+                            "content": f"{JIRA_URL}/secure/attachment/55/one.txt",
+                        },
+                        {
+                            "id": "56",
+                            "filename": "two.txt",
+                            "content": f"{JIRA_URL}/secure/attachment/56/two.txt",
+                        },
+                    ]
+                }
+            },
+        )
+    )
+    respx.get(f"{JIRA_URL}/secure/attachment/55/one.txt").mock(return_value=httpx.Response(200, content=b"one"))
+    respx.get(f"{JIRA_URL}/secure/attachment/56/two.txt").mock(return_value=httpx.Response(200, content=b"two"))
+
+    result = runner.invoke(
+        app,
+        ["jira", "attachment", "download-all", "https://dreamingoutloud.ru/browse/HAR-157", "-o", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "one.txt").read_bytes() == b"one"
+    assert (tmp_path / "two.txt").read_bytes() == b"two"
+
+
 # ---------------------------------------------------------------------------
 # Write commands
 # ---------------------------------------------------------------------------

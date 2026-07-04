@@ -350,7 +350,7 @@ atls jira issue get PROJ-1 --format=json
 - `jira epic link`
 - `jira watcher list|add|remove`
 - `jira worklog list|add`
-- `jira attachment download|upload|delete`
+- `jira attachment list|download|download-all|upload|delete`
 - `jira dev-info get|get-many`
 - `jira service-desk list|queues|queue-issues`
 - `jira user get`
