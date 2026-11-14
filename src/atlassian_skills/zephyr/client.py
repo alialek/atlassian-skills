@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any, TypeVar
 
+import httpx
 from pydantic import BaseModel
 
 from atlassian_skills.core.auth import Credential
 from atlassian_skills.core.client import BaseClient
-from atlassian_skills.core.errors import NotFoundError
+from atlassian_skills.core.errors import NotFoundError, ValidationError
 from atlassian_skills.zephyr.models import (
     TestStep,
     TestStepRequest,
@@ -18,6 +21,15 @@ from atlassian_skills.zephyr.models import (
 )
 
 T = TypeVar("T", bound=BaseModel)
+_TESTCASE_DELTA_FIELDS = ("key", "createdOn", "updatedOn", "lastModifiedOn", "majorVersion", "latestVersion")
+
+
+def parse_zephyr_timestamp(value: str) -> datetime:
+    """Parse an ISO 8601 date or timestamp, defaulting to UTC as in Zephyr."""
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    timestamp = datetime.fromisoformat(value)
+    return timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=timezone.utc)
 
 
 class ZephyrClient(BaseClient):
@@ -50,6 +62,21 @@ class ZephyrClient(BaseClient):
         start_at: int = 0,
         max_results: int = 200,
     ) -> list[T]:
+        data = self._search_response(
+            path, query=query, fields=fields, start_at=start_at, max_results=max_results
+        ).json()
+        items = data if isinstance(data, list) else data.get("results", [])
+        return [model.model_validate(item) for item in items]
+
+    def _search_response(
+        self,
+        path: str,
+        *,
+        query: str | None,
+        fields: str | None,
+        start_at: int,
+        max_results: int,
+    ) -> httpx.Response:
         params: dict[str, Any] = {}
         if query:
             params["query"] = query
@@ -59,17 +86,21 @@ class ZephyrClient(BaseClient):
             params["startAt"] = start_at
         if max_results != 200:
             params["maxResults"] = max_results
-        data = self.get(self._api(path), params=params).json()
-        items = data if isinstance(data, list) else data.get("results", [])
-        return [model.model_validate(item) for item in items]
+        return self.get(self._api(path), params=params)
 
     # ------------------------------------------------------------------
     # Test cases
     # ------------------------------------------------------------------
 
-    def get_testcase(self, key: str, *, fields: str | None = None) -> ZephyrTestCase:
+    def _get_testcase_response(self, key: str, *, fields: str | None) -> httpx.Response:
         params = {"fields": fields} if fields else None
-        return ZephyrTestCase.model_validate(self.get(self._api(f"testcase/{key}"), params=params).json())
+        return self.get(self._api(f"testcase/{key}"), params=params)
+
+    def get_testcase(self, key: str, *, fields: str | None = None) -> ZephyrTestCase:
+        return ZephyrTestCase.model_validate(self._get_testcase_response(key, fields=fields).json())
+
+    def get_testcase_raw(self, key: str, *, fields: str | None = None) -> bytes:
+        return self._get_testcase_response(key, fields=fields).content
 
     def create_testcase(self, data: dict[str, Any]) -> str:
         result = self.post(self._api("testcase"), json=data).json()
@@ -97,6 +128,61 @@ class ZephyrClient(BaseClient):
             start_at=start_at,
             max_results=max_results,
         )
+
+    def search_testcases_raw(
+        self,
+        *,
+        query: str | None = None,
+        fields: str | None = None,
+        start_at: int = 0,
+        max_results: int = 200,
+    ) -> bytes:
+        return self._search_response(
+            "testcase/search", query=query, fields=fields, start_at=start_at, max_results=max_results
+        ).content
+
+    def search_updated_testcases(
+        self,
+        updated_after: datetime,
+        *,
+        query: str | None = None,
+        fields: str | None = None,
+        start_at: int = 0,
+        page_size: int = 200,
+        on_page: Callable[[int, int], None] | None = None,
+    ) -> list[ZephyrTestCase]:
+        """Scan projected metadata and return cases strictly newer than the cutoff."""
+        if start_at < 0 or page_size < 1:
+            raise ValidationError("--updated-after requires --start-at >= 0 and --max-results >= 1")
+        if updated_after.utcoffset() is None:
+            raise ValidationError("The updated-after cutoff must have a timezone")
+
+        requested = [field.strip() for field in (fields or "").split(",") if field.strip()]
+        projection = ",".join(dict.fromkeys((*_TESTCASE_DELTA_FIELDS, *requested)))
+        matches: list[ZephyrTestCase] = []
+        offset = start_at
+        previous_page: list[tuple[str, int | None]] = []
+        while True:
+            page = self.search_testcases(query=query, fields=projection, start_at=offset, max_results=page_size)
+            if not page:
+                return matches
+            page_ids = [(case.key, case.major_version) for case in page]
+            if page_ids == previous_page:
+                raise ValidationError(f"Zephyr repeated a test case page at offset {offset}")
+            previous_page = page_ids
+            for case in page:
+                timestamp = case.last_modified_on or case.created_on
+                try:
+                    changed_at = parse_zephyr_timestamp(timestamp)
+                except ValueError as exc:
+                    raise ValidationError(
+                        f"Zephyr test case {case.key} has no valid modification or creation date"
+                    ) from exc
+                if changed_at > updated_after:
+                    matches.append(case)
+            offset += len(page)
+            if on_page is not None:
+                on_page(offset - start_at, len(matches))
 
     # ------------------------------------------------------------------
     # Test plans

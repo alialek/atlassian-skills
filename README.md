@@ -386,6 +386,23 @@ atls jira issue get PROJ-1 --format=json
 
 > Zephyr uses `/rest/atm/1.0` on the configured Jira/Zephyr Server/DC URL. Write commands accept `--data-json` and support `--dry-run`.
 
+Find test cases changed strictly after a cutoff:
+
+```bash
+atls zephyr testcase search --query 'projectKey = "PROJ"' \
+  --updated-after '2026-11-12T15:00:00Z' --format=json
+```
+
+The cutoff accepts an ISO 8601 date or timestamp and defaults to UTC when no timezone is given.
+The CLI scans all pages matching the query, requesting metadata and any extra `--fields` you specify.
+It compares `last_modified_on` (`updatedOn` in Zephyr) or falls back to `created_on`.
+JSON includes `major_version` and `latest_version` when Zephyr provides them.
+
+With `--updated-after`, `--max-results` is the page size and `--start-at` is the starting offset
+(leave it at zero to scan the whole query). Progress goes to stderr and can be suppressed with global `--quiet`.
+The scan only sees existing cases. For the original API response, use `--format=raw` with
+`testcase get` or a regular `testcase search`.
+
 ### Utility
 - `setup` — interactive wizard (URLs, tokens, AI agent skills, auto-verify)
 - `setup --skills-only` — silent skill refresh, used by `atls upgrade`

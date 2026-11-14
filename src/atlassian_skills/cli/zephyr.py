@@ -14,7 +14,7 @@ from atlassian_skills.core.dryrun import format_dry_run
 from atlassian_skills.core.errors import AtlasError, ValidationError
 from atlassian_skills.core.format import OutputFormat, format_output
 from atlassian_skills.core.models import WriteResult
-from atlassian_skills.zephyr.client import ZephyrClient
+from atlassian_skills.zephyr.client import ZephyrClient, parse_zephyr_timestamp
 from atlassian_skills.zephyr.models import TestStepRequest
 
 zephyr_app = typer.Typer(help="Zephyr Scale Server/DC commands", no_args_is_help=True)
@@ -104,12 +104,12 @@ def _render_model(model: BaseModel, fmt: OutputFormat) -> str:
     return format_output(model.model_dump(), fmt)
 
 
-def _render_models(models: Sequence[BaseModel], fmt: OutputFormat) -> str:
+def _render_models(models: Sequence[BaseModel], fmt: OutputFormat, *, exclude_unset: bool = False) -> str:
     if fmt == OutputFormat.COMPACT:
         return format_output(
             [m.to_compact_dict() if hasattr(m, "to_compact_dict") else m.model_dump() for m in models], fmt
         )
-    return format_output([m.model_dump() for m in models], fmt)
+    return format_output([m.model_dump(exclude_unset=exclude_unset) for m in models], fmt)
 
 
 def _write_result(
@@ -133,7 +133,12 @@ def testcase_get(
     ctx.ensure_object(dict)
     fmt = _resolve_fmt(ctx.obj, format)
     try:
-        typer.echo(_render_model(_make_client(ctx.obj).get_testcase(key, fields=fields), fmt))
+        client = _make_client(ctx.obj)
+        ctx.call_on_close(client.close)
+        if fmt == OutputFormat.RAW:
+            typer.echo(client.get_testcase_raw(key, fields=fields), nl=False)
+            return
+        typer.echo(_render_model(client.get_testcase(key, fields=fields), fmt))
     except AtlasError as e:
         _handle_error(e, fmt)
 
@@ -144,16 +149,48 @@ def testcase_search(
     query: str | None = typer.Option(None, "--query", help="TQL query"),
     fields: str | None = typer.Option(None, "--fields", help="Comma-separated fields"),
     start_at: int = typer.Option(0, "--start-at", help="Pagination offset"),
-    max_results: int = typer.Option(200, "--max-results", help="Maximum results"),
+    max_results: int = typer.Option(200, "--max-results", help="Maximum results (page size with --updated-after)"),
+    updated_after: str | None = typer.Option(
+        None,
+        "--updated-after",
+        help="Scan for cases changed strictly after an ISO 8601 date or timestamp (UTC by default)",
+    ),
     format: str | None = typer.Option(None, "--format", help="Override output format"),
 ) -> None:
     ctx.ensure_object(dict)
     fmt = _resolve_fmt(ctx.obj, format)
     try:
-        items = _make_client(ctx.obj).search_testcases(
-            query=query, fields=fields, start_at=start_at, max_results=max_results
-        )
-        typer.echo(_render_models(items, fmt))
+        cutoff = None
+        if updated_after is not None:
+            if fmt == OutputFormat.RAW:
+                raise ValidationError("--updated-after cannot be combined with --format=raw", hint="Use --format=json.")
+            try:
+                cutoff = parse_zephyr_timestamp(updated_after)
+            except ValueError as exc:
+                raise ValidationError("--updated-after expects an ISO 8601 date or timestamp") from exc
+
+        client = _make_client(ctx.obj)
+        ctx.call_on_close(client.close)
+        if cutoff is not None:
+
+            def report_progress(scanned: int, matched: int) -> None:
+                typer.echo(f"Scanned {scanned} test cases ({matched} matched)", err=True)
+
+            items = client.search_updated_testcases(
+                cutoff,
+                query=query,
+                fields=fields,
+                start_at=start_at,
+                page_size=max_results,
+                on_page=None if ctx.obj.get("quiet") else report_progress,
+            )
+            typer.echo(_render_models(items, fmt, exclude_unset=True))
+        elif fmt == OutputFormat.RAW:
+            body = client.search_testcases_raw(query=query, fields=fields, start_at=start_at, max_results=max_results)
+            typer.echo(body, nl=False)
+        else:
+            items = client.search_testcases(query=query, fields=fields, start_at=start_at, max_results=max_results)
+            typer.echo(_render_models(items, fmt))
     except AtlasError as e:
         _handle_error(e, fmt)
 

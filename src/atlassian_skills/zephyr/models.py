@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 
 class TestStep(BaseModel):
@@ -92,9 +92,20 @@ class ZephyrTestCase(BaseModel):
     custom_fields: dict[str, Any] = Field(default_factory=dict, alias="customFields")
     issue_links: list[Any] = Field(default_factory=list, alias="issueLinks")
     created_on: str = Field(default="", alias="createdOn")
-    last_modified_on: str = Field(default="", alias="lastModifiedOn")
+    last_modified_on: str = Field(
+        default="",
+        alias="lastModifiedOn",
+        validation_alias=AliasChoices("updatedOn", "lastModifiedOn"),
+    )
+    major_version: int | None = Field(default=None, alias="majorVersion")
+    latest_version: bool | None = Field(default=None, alias="latestVersion")
     created_by: str | None = Field(default=None, alias="createdBy")
     last_modified_by: str | None = Field(default=None, alias="lastModifiedBy")
+
+    @field_validator("created_on", "last_modified_on", mode="before")
+    @classmethod
+    def _normalize_missing_date(cls, value: Any) -> Any:
+        return "" if value is None else value
 
     def to_compact_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {

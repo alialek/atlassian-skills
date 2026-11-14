@@ -37,6 +37,149 @@ def test_cli_zephyr_testcase_get_json() -> None:
 
 
 @respx.mock
+@pytest.mark.parametrize("operation", ["get", "search"])
+def test_cli_zephyr_testcase_json_preserves_metadata(operation: str) -> None:
+    case = {
+        "key": "JQA-T1",
+        "updatedOn": "2026-11-12T15:00:00.123Z",
+        "majorVersion": 4,
+        "latestVersion": False,
+    }
+    is_get = operation == "get"
+    path = "JQA-T1" if is_get else "search"
+    respx.get(f"{ZEPHYR_URL}{API}/testcase/{path}").respond(json=case if is_get else [case])
+
+    args = ["get", path] if is_get else ["search"]
+    result = runner.invoke(app, ["zephyr", "testcase", *args, "--format=json"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    row = data if is_get else data[0]
+    assert row["last_modified_on"] == case["updatedOn"]
+    assert row["major_version"] == 4
+    assert row["latest_version"] is False
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("args", "body"),
+    [
+        (["get", "JQA-T1"], b'{ "key": "JQA-T1", "majorVersion": 4 }'),
+        (["search"], b'{\n  "results": [{ "key": "JQA-T1", "majorVersion": 4 }]\n}\n'),
+    ],
+)
+def test_cli_zephyr_testcase_raw_preserves_api_body(args: list[str], body: bytes) -> None:
+    path = args[-1]
+    respx.get(f"{ZEPHYR_URL}{API}/testcase/{path}").respond(content=body)
+
+    result = runner.invoke(app, ["zephyr", "testcase", *args, "--format=raw"])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout_bytes == body
+
+
+@respx.mock
+def test_cli_zephyr_updated_after_scans_pages_and_filters_timestamps() -> None:
+    url = f"{ZEPHYR_URL}{API}/testcase/search"
+    query = 'projectKey = "JQA"'
+    route = respx.get(url).mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json=[{"key": "JQA-T1", "updatedOn": "2026-11-12T12:00:00-03:00", "name": "Exact cutoff"}],
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"key": "JQA-T2", "createdOn": "2026-11-12T15:00:01Z", "majorVersion": 1, "name": "New"},
+                        {"key": "JQA-T3", "lastModifiedOn": "2026-11-12T15:00:02Z", "majorVersion": 2},
+                    ]
+                },
+            ),
+            httpx.Response(200, json=[]),
+        ]
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "zephyr",
+            "testcase",
+            "search",
+            "--query",
+            query,
+            "--updated-after",
+            "2026-11-12T15:00:00Z",
+            "--max-results",
+            "2",
+            "--fields",
+            "name",
+            "--format=json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    rows = json.loads(result.stdout)
+    assert [row["key"] for row in rows] == ["JQA-T2", "JQA-T3"]
+    assert rows[0]["name"] == "New"
+    assert rows[1]["major_version"] == 2
+    params = [call.request.url.params for call in route.calls]
+    assert [p.get("startAt", "0") for p in params] == ["0", "1", "3"]
+    assert all(p["query"] == query and p["maxResults"] == "2" for p in params)
+    assert all(
+        set(p["fields"].split(","))
+        == {"key", "createdOn", "updatedOn", "lastModifiedOn", "majorVersion", "latestVersion", "name"}
+        for p in params
+    )
+    assert "Scanned 3 test cases" in result.stderr
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("extra_args", "message"),
+    [
+        (["--updated-after", "yesterday"], "ISO 8601"),
+        (["--updated-after", "2026-11-12", "--format=raw"], "--format=raw"),
+    ],
+)
+def test_cli_zephyr_updated_after_rejects_invalid_options(extra_args: list[str], message: str) -> None:
+    route = respx.get(f"{ZEPHYR_URL}{API}/testcase/search").respond(json=[])
+
+    result = runner.invoke(app, ["zephyr", "testcase", "search", *extra_args])
+
+    assert result.exit_code == ExitCode.VALIDATION
+    assert message in result.stderr
+    assert not route.called
+
+
+@respx.mock
+def test_cli_zephyr_updated_after_reports_cases_without_a_date() -> None:
+    respx.get(f"{ZEPHYR_URL}{API}/testcase/search").respond(
+        json=[{"key": "JQA-T1", "createdOn": None, "updatedOn": None}]
+    )
+
+    result = runner.invoke(app, ["zephyr", "testcase", "search", "--updated-after", "2026-11-12", "--format=json"])
+
+    assert result.exit_code == ExitCode.VALIDATION
+    assert "JQA-T1" in json.loads(result.stdout)["error"]["message"]
+
+
+@respx.mock
+def test_cli_zephyr_updated_after_stops_if_server_repeats_a_page() -> None:
+    route = respx.get(f"{ZEPHYR_URL}{API}/testcase/search").respond(
+        json=[{"key": "JQA-T1", "createdOn": "2026-11-13T01:00:00Z"}]
+    )
+
+    result = runner.invoke(app, ["--quiet", "zephyr", "testcase", "search", "--updated-after", "2026-11-12"])
+
+    assert result.exit_code == ExitCode.VALIDATION
+    assert route.call_count == 2
+    assert "repeated a test case page" in result.stderr
+    assert "Scanned" not in result.stderr
+
+
+@respx.mock
 def test_cli_zephyr_search_compact() -> None:
     respx.get(f"{ZEPHYR_URL}{API}/testcase/search").mock(
         return_value=httpx.Response(200, json=[{"key": "JQA-T1", "name": "Login", "projectKey": "JQA"}])
